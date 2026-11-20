@@ -35,6 +35,9 @@ class _SessionPageState extends State<SessionPage> {
   bool _busy = false;
   String? _progress;
 
+  /// 结果区当前看的是第几个目标（多目标时切换）
+  int _resultIndex = 0;
+
   @override
   void initState() {
     super.initState();
@@ -587,7 +590,11 @@ class _SessionPageState extends State<SessionPage> {
                     if (isReference)
                       _miniBtn('换图', () => _pick(role, camera: false))
                     else
-                      _miniBtn('对比', () => _compareOne(capture)),
+                      _miniBtn(
+                        calibrated ? '对比' : '对比（先标定）',
+                        () => _compareOne(capture),
+                        enabled: calibrated,
+                      ),
                     _miniBtn('删除', () => _confirmDelete(capture),
                         color: AppColors.danger),
                   ],
@@ -600,9 +607,10 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
-  Widget _miniBtn(String label, VoidCallback onTap, {Color? color}) {
+  Widget _miniBtn(String label, VoidCallback onTap,
+      {Color? color, bool enabled = true}) {
     return TextButton(
-      onPressed: onTap,
+      onPressed: enabled ? onTap : null,
       style: TextButton.styleFrom(
         minimumSize: const Size(0, 30),
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -655,7 +663,7 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
-  /// 结果区：并排大图 + ΔE，点图全屏。
+  /// 结果区：可切换目标，并排大图 + ΔE，点图全屏。
   Widget _resultSection(SessionDetail detail) {
     final Capture? reference = detail.reference;
     final List<Capture> comparedTargets = detail.targets
@@ -665,19 +673,72 @@ class _SessionPageState extends State<SessionPage> {
       return const SizedBox.shrink();
     }
 
-    final Capture target = comparedTargets.first;
+    // 删除目标后索引可能越界
+    if (_resultIndex >= comparedTargets.length) _resultIndex = 0;
+    final Capture target = comparedTargets[_resultIndex];
     final Comparison comparison = detail.comparisons[target.id]!;
     final String refPath = reference.calibratedPath ?? reference.imagePath;
     final String outPath = comparison.processedPath;
+    final bool multi = comparedTargets.length > 1;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _sectionTitle('对比结果'),
+        Row(
+          children: <Widget>[
+            const Text('对比结果',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            if (multi) ...<Widget>[
+              IconButton(
+                onPressed: _resultIndex == 0
+                    ? null
+                    : () => setState(() => _resultIndex--),
+                icon: const Icon(Icons.chevron_left, size: 20),
+                visualDensity: VisualDensity.compact,
+                tooltip: '上一个目标',
+              ),
+              Text('${_resultIndex + 1}/${comparedTargets.length}',
+                  style: const TextStyle(fontSize: 12)),
+              IconButton(
+                onPressed: _resultIndex == comparedTargets.length - 1
+                    ? null
+                    : () => setState(() => _resultIndex++),
+                icon: const Icon(Icons.chevron_right, size: 20),
+                visualDensity: VisualDensity.compact,
+                tooltip: '下一个目标',
+              ),
+            ],
+          ],
+        ),
+        if (multi)
+          SizedBox(
+            height: 36,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: comparedTargets.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              itemBuilder: (BuildContext context, int i) {
+                final Capture t = comparedTargets[i];
+                final Comparison c = detail.comparisons[t.id]!;
+                return ChoiceChip(
+                  label: Text('${t.id.substring(0, 4)} · ΔE ${c.deltaE}',
+                      style: const TextStyle(fontSize: 11)),
+                  selected: i == _resultIndex,
+                  onSelected: (_) => setState(() => _resultIndex = i),
+                  visualDensity: VisualDensity.compact,
+                );
+              },
+            ),
+          ),
+        const SizedBox(height: 6),
         GestureDetector(
           onTap: () => _openViewer(
             <String>[refPath, outPath],
-            <String>['参照（家里）', '目标（校正后）'],
+            <String>[
+              '参照（家里）',
+              '目标 ${target.id.substring(0, 4)}（校正后）'
+            ],
             0,
           ),
           child: ClipRRect(
@@ -721,7 +782,10 @@ class _SessionPageState extends State<SessionPage> {
               child: OutlinedButton.icon(
                 onPressed: () => _openViewer(
                   <String>[refPath, outPath],
-                  <String>['参照（家里）', '目标（校正后）'],
+                  <String>[
+                    '参照（家里）',
+                    '目标 ${target.id.substring(0, 4)}（校正后）'
+                  ],
                   0,
                 ),
                 icon: const Icon(Icons.fullscreen, size: 18),
