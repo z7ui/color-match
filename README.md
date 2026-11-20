@@ -2,6 +2,12 @@
 
 装修选色对比：把不同环境（家里 / 门窗厂 / 建材市场）拍的照片**拉到同一光线基准**，排除「照肉灯」这类光源干扰，判断瓷砖、门、美缝到底是不是同一个颜色。
 
+## 下载
+
+- 介绍文章：<https://www.z7ui.cn/color-match/>
+- 直接下载 APK：<https://www.z7ui.cn/tile-api/apk/color-match/color-match-0.1.0.apk>
+- GitHub Release：<https://github.com/z7ui/color-match/releases/tag/v0.1.0>
+
 ## 核心链路
 
 ```
