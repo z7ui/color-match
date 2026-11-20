@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_theme.dart';
 import '../../core/config.dart';
 import '../../core/net.dart';
+import 'permissions_page.dart';
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -118,6 +119,17 @@ class _AboutPageState extends State<AboutPage> {
                   subtitle: Text(_announcement ?? '点一下看看服务器有没有公告'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _loadAnnouncement,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.shield_outlined),
+                  title: const Text('权限'),
+                  subtitle: const Text('相机 / 相册，各自用在哪'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => const PermissionsPage()),
+                  ),
                 ),
               ],
             ),

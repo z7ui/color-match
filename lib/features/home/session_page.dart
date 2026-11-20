@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -13,10 +14,13 @@ import '../../core/calibration.dart';
 import '../../core/compare.dart';
 import '../../core/db.dart';
 import '../../core/models.dart';
+import '../../core/storage.dart';
 import '../capture/capture_page.dart';
 import '../capture/calibrate_page.dart';
+import '../viewer/photo_view_page.dart';
 
 /// 会话详情：一个参照（家里）+ 多个目标（厂里 / 其他环境）。
+/// 布局按「一行一张图」做，避免把照片挤成小方块。
 class SessionPage extends StatefulWidget {
   const SessionPage({super.key, required this.sessionId});
 
@@ -43,6 +47,8 @@ class _SessionPageState extends State<SessionPage> {
     setState(() => _detail = detail);
   }
 
+  // ------------------------------------------------------------ 采集
+
   Future<void> _pick(String role, {required bool camera}) async {
     if (camera) {
       final String? path = await Navigator.of(context).push<String>(
@@ -54,7 +60,6 @@ class _SessionPageState extends State<SessionPage> {
       await _saveCapture(role, path, 'camera');
       return;
     }
-
     final XFile? picked =
         await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 2400);
     if (picked == null) return;
@@ -81,6 +86,45 @@ class _SessionPageState extends State<SessionPage> {
     ));
     await _load();
   }
+
+  Future<void> _confirmDelete(Capture capture) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('删除这张图？'),
+        content: Text(capture.isReference
+            ? '参照图删掉后，目标图就没有基准了。'
+            : '对应的对比结果会一起删掉。'),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    await AppDb.instance.deleteCapture(capture.id, widget.sessionId);
+    for (final String? path in <String?>[
+      capture.imagePath,
+      capture.calibratedPath
+    ]) {
+      if (path != null) {
+        try {
+          final File f = File(path);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+    }
+    await _load();
+    if (mounted) showSnack(context, '已删除');
+  }
+
+  // ------------------------------------------------------------ 标定
 
   Future<void> _calibrate(Capture capture) async {
     final WhitePoint? white = await Navigator.of(context).push<WhitePoint>(
@@ -118,42 +162,12 @@ class _SessionPageState extends State<SessionPage> {
     if (mounted) showSnack(context, '已标定：白点 $white → 255');
   }
 
-  /// 对单个目标做对比。
-  Future<void> _compareOne(Capture target) async {
-    final SessionDetail? detail = _detail;
-    final Capture? reference = detail?.reference;
-    if (reference == null) {
-      showSnack(context, '先拍/传一张参照图', error: true);
-      return;
-    }
-    if (reference.whiteR == null || target.whiteR == null) {
-      showSnack(context, '两张图都要先标定（框选白纸）', error: true);
-      return;
-    }
-
-    setState(() {
-      _busy = true;
-      _progress = '对比中…';
-    });
-    try {
-      await _runCompare(reference, target);
-      await _load();
-      if (mounted) showSnack(context, '完成');
-    } catch (error) {
-      if (mounted) showSnack(context, '对比失败：$error', error: true);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _progress = null;
-        });
-      }
-    }
-  }
+  // ------------------------------------------------------------ 对比
 
   Future<Comparison> _runCompare(Capture reference, Capture target) async {
     final img.Image refImage = img.decodeImage(
-        await File(reference.calibratedPath ?? reference.imagePath).readAsBytes())!;
+        await File(reference.calibratedPath ?? reference.imagePath)
+            .readAsBytes())!;
     final img.Image targetImage =
         img.decodeImage(await File(target.imagePath).readAsBytes())!;
 
@@ -186,7 +200,36 @@ class _SessionPageState extends State<SessionPage> {
     return comparison;
   }
 
-  /// 所有未对比的目标一次跑完。
+  Future<void> _compareOne(Capture target) async {
+    final Capture? reference = _detail?.reference;
+    if (reference == null) {
+      showSnack(context, '先拍/传一张参照图', error: true);
+      return;
+    }
+    if (reference.whiteR == null || target.whiteR == null) {
+      showSnack(context, '两张图都要先标定（框选白纸）', error: true);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _progress = '对比中…';
+    });
+    try {
+      await _runCompare(reference, target);
+      await _load();
+      if (mounted) showSnack(context, '完成');
+    } catch (error) {
+      if (mounted) showSnack(context, '对比失败：$error', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
+      }
+    }
+  }
+
   Future<void> _compareAll() async {
     final SessionDetail? detail = _detail;
     final Capture? reference = detail?.reference;
@@ -195,7 +238,6 @@ class _SessionPageState extends State<SessionPage> {
       showSnack(context, '参照图还没标定', error: true);
       return;
     }
-
     final List<Capture> pending = detail.targets
         .where((Capture t) =>
             t.whiteR != null && !detail.comparisons.containsKey(t.id))
@@ -204,7 +246,6 @@ class _SessionPageState extends State<SessionPage> {
       showSnack(context, '没有待对比的目标（或都没标定）');
       return;
     }
-
     setState(() {
       _busy = true;
       _progress = '0/${pending.length}';
@@ -213,9 +254,7 @@ class _SessionPageState extends State<SessionPage> {
     for (final Capture target in pending) {
       try {
         await _runCompare(reference, target);
-      } catch (_) {
-        // 单个失败不影响其他
-      }
+      } catch (_) {}
       done++;
       if (mounted) setState(() => _progress = '$done/${pending.length}');
     }
@@ -228,7 +267,19 @@ class _SessionPageState extends State<SessionPage> {
     showSnack(context, '已对比 $done 个目标');
   }
 
-  /// 导出：参照 + 每个目标（校正前/后）拼成一张长图。
+  // ------------------------------------------------------------ 导出
+
+  void _openViewer(List<String> paths, List<String> captions, int index) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PhotoViewPage(
+        items: paths,
+        captions: captions,
+        initialIndex: index,
+      ),
+    ));
+  }
+
+  /// 保存到本地文件夹，并显示路径（可复制、可分享）。
   Future<void> _export() async {
     final SessionDetail? detail = _detail;
     final Capture? reference = detail?.reference;
@@ -249,9 +300,9 @@ class _SessionPageState extends State<SessionPage> {
       for (final Capture target in detail.targets) {
         final Comparison? comparison = detail.comparisons[target.id];
         if (comparison == null) continue;
-        final img.Image before =
-            downscale(img.decodeImage(await File(target.imagePath).readAsBytes())!,
-                maxSide: 1000);
+        final img.Image before = downscale(
+            img.decodeImage(await File(target.imagePath).readAsBytes())!,
+            maxSide: 1000);
         final img.Image after = downscale(
             img.decodeImage(await File(comparison.processedPath).readAsBytes())!,
             maxSide: 1000);
@@ -259,7 +310,8 @@ class _SessionPageState extends State<SessionPage> {
           reference: ref,
           before: before,
           after: after,
-          label: '#${target.id.substring(0, 4)}  ΔE ${comparison.deltaE}',
+          label:
+              'target ${target.id.substring(0, 4)}  dE ${comparison.deltaE}',
         ));
       }
       if (rows.isEmpty) {
@@ -268,15 +320,61 @@ class _SessionPageState extends State<SessionPage> {
       }
 
       final img.Image report = buildVerticalReport(rows);
-      final Directory dir = await getApplicationDocumentsDirectory();
-      final String path = p.join(
-          dir.path, 'captures', widget.sessionId, 'report_${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await File(path).writeAsBytes(img.encodeJpg(report, quality: 92));
+      final Directory dir = await exportDir();
+      final String stamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(RegExp(r'[:.]'), '-')
+          .substring(0, 19);
+      final String fileName =
+          '${detail.session.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')}_$stamp.jpg';
+      final File file = File(p.join(dir.path, fileName));
+      await file.writeAsBytes(img.encodeJpg(report, quality: 92));
 
-      await SharePlus.instance.share(ShareParams(
-        files: <XFile>[XFile(path)],
-        text: '${detail.session.name} · ${detail.comparisons.length} 个目标',
-      ));
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          title: const Text('已保存到本地'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Text('文件:', style: TextStyle(fontSize: 12)),
+              const SizedBox(height: 4),
+              SelectableText(fileName,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 12),
+              const Text('目录:', style: TextStyle(fontSize: 12)),
+              const SizedBox(height: 4),
+              SelectableText(prettyPath(dir.path),
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.textSecondary)),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(
+                    ClipboardData(text: p.join(dir.path, fileName)));
+                Navigator.pop(ctx);
+                showSnack(context, '路径已复制');
+              },
+              child: const Text('复制路径'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await SharePlus.instance
+                    .share(ShareParams(files: <XFile>[XFile(file.path)]));
+              },
+              child: const Text('分享'),
+            ),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('好')),
+          ],
+        ),
+      );
     } catch (error) {
       if (mounted) showSnack(context, '导出失败：$error', error: true);
     } finally {
@@ -289,6 +387,8 @@ class _SessionPageState extends State<SessionPage> {
     }
   }
 
+  // ------------------------------------------------------------ 构建
+
   @override
   Widget build(BuildContext context) {
     final SessionDetail? detail = _detail;
@@ -300,82 +400,42 @@ class _SessionPageState extends State<SessionPage> {
           if (detail != null && detail.comparisons.isNotEmpty)
             IconButton(
               onPressed: _busy ? null : _export,
-              icon: const Icon(Icons.ios_share),
-              tooltip: '导出对比图',
+              icon: const Icon(Icons.save_alt),
+              tooltip: '保存对比图到本地',
             ),
         ],
       ),
       body: detail == null
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(AppSpacing.lg),
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xl),
               children: <Widget>[
-                _captureCard(
-                    'reference', '参照（家里）', '默认以这张为基准', detail.reference),
-                const SizedBox(height: AppSpacing.lg),
+                _sectionTitle('参照（家里）'),
+                _captureRow(detail.reference,
+                    role: 'reference', title: '参照图', isReference: true),
+                const SizedBox(height: AppSpacing.md),
                 Row(
                   children: <Widget>[
-                    const Text('目标',
-                        style:
-                            TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                    const SizedBox(width: 8),
-                    Text('${detail.targets.length} 个',
-                        style: const TextStyle(
-                            fontSize: 13, color: AppColors.textSecondary)),
+                    _sectionTitle('目标（${detail.targets.length}）'),
                     const Spacer(),
                     TextButton.icon(
-                      onPressed: _busy
-                          ? null
-                          : () => showModalBottomSheet<void>(
-                                context: context,
-                                builder: (_) => SafeArea(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      ListTile(
-                                        leading: const Icon(Icons.camera_alt_outlined),
-                                        title: const Text('拍照'),
-                                        onTap: () {
-                                          Navigator.of(context).pop();
-                                          _pick('target', camera: true);
-                                        },
-                                      ),
-                                      ListTile(
-                                        leading:
-                                            const Icon(Icons.photo_library_outlined),
-                                        title: const Text('从相册上传'),
-                                        onTap: () {
-                                          Navigator.of(context).pop();
-                                          _pick('target', camera: false);
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
+                      onPressed: _busy ? null : _addTarget,
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('添加'),
                     ),
                   ],
                 ),
-                const SizedBox(height: AppSpacing.sm),
                 if (detail.targets.isEmpty)
-                  Container(
-                    padding: const EdgeInsets.symmetric(vertical: 28),
-                    decoration: BoxDecoration(
-                      color: AppColors.card(context),
-                      borderRadius: BorderRadius.circular(AppRadius.card),
-                      border: Border.all(color: AppColors.line(context)),
-                    ),
-                    child: const Center(
-                      child: Text('还没有目标图，点右上角「添加」',
-                          style: TextStyle(
-                              fontSize: 13, color: AppColors.textSecondary)),
-                    ),
-                  )
+                  _emptyRow('还没有目标图，点「添加」拍厂里的样品')
                 else
-                  ...detail.targets.map((Capture t) => _targetCard(t)),
-                const SizedBox(height: AppSpacing.lg),
+                  ...detail.targets.map((Capture t) => _captureRow(
+                        t,
+                        role: 'target',
+                        title: '目标 ${t.id.substring(0, 4)}',
+                        comparison: detail.comparisons[t.id],
+                      )),
+                const SizedBox(height: AppSpacing.md),
                 if (detail.targets.isNotEmpty)
                   FilledButton.icon(
                     onPressed: _busy ? null : _compareAll,
@@ -389,156 +449,296 @@ class _SessionPageState extends State<SessionPage> {
                         ? (_progress ?? '处理中…')
                         : '全部对比（${detail.targets.where((Capture t) => t.whiteR != null && !detail.comparisons.containsKey(t.id)).length} 个待处理）'),
                   ),
+                if (detail.comparisons.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: AppSpacing.lg),
+                  _resultSection(detail),
+                ],
               ],
             ),
     );
   }
 
-  Widget _captureCard(
-      String role, String title, String subtitle, Capture? capture) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _sectionTitle(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm, top: AppSpacing.xs),
+      child: Text(text,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+    );
+  }
+
+  Widget _emptyRow(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppColors.card(context),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.line(context)),
+      ),
+      child: Text(text,
+          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+    );
+  }
+
+  /// 一行：缩略图 + 信息 + 操作。不再用大卡片占满屏。
+  Widget _captureRow(
+    Capture? capture, {
+    required String role,
+    required String title,
+    bool isReference = false,
+    Comparison? comparison,
+  }) {
+    if (capture == null) {
+      return Container(
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: AppColors.card(context),
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: AppColors.line(context)),
+        ),
+        child: Row(
           children: <Widget>[
-            Row(
+            _thumbPlaceholder(),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Text('还没拍',
+                  style:
+                      TextStyle(fontSize: 12, color: AppColors.sub(context))),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _pick(role, camera: true),
+              icon: const Icon(Icons.camera_alt_outlined, size: 16),
+              label: const Text('拍照'),
+              style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10)),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: () => _pick(role, camera: false),
+              icon: const Icon(Icons.photo_library_outlined, size: 20),
+              tooltip: '从相册选',
+            ),
+          ],
+        ),
+      );
+    }
+
+    final String shown = comparison?.processedPath ??
+        capture.calibratedPath ??
+        capture.imagePath;
+    final bool calibrated = capture.whiteR != null;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppColors.card(context),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.line(context)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          GestureDetector(
+            onTap: () => _openViewer(
+              <String>[shown, capture.imagePath],
+              <String>[
+                comparison != null ? '$title（校正后）' : title,
+                '$title（原始）',
+              ],
+              0,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(File(shown),
+                  width: 84, height: 84, fit: BoxFit.cover),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(title,
-                    style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                if (capture != null)
-                  IconButton(
-                    onPressed: () => _calibrate(capture),
-                    icon: const Icon(Icons.crop_free, size: 20),
-                    tooltip: '标定（框选白纸）',
-                  ),
+                Row(
+                  children: <Widget>[
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 6),
+                    if (comparison != null)
+                      Text('ΔE ${comparison.deltaE}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.success)),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  calibrated
+                      ? '白点 (${capture.whiteR}, ${capture.whiteG}, ${capture.whiteB})'
+                      : '未标定',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: calibrated
+                          ? AppColors.sub(context)
+                          : AppColors.warning),
+                ),
+                Wrap(
+                  children: <Widget>[
+                    _miniBtn('标定', () => _calibrate(capture)),
+                    if (isReference)
+                      _miniBtn('换图', () => _pick(role, camera: false))
+                    else
+                      _miniBtn('对比', () => _compareOne(capture)),
+                    _miniBtn('删除', () => _confirmDelete(capture),
+                        color: AppColors.danger),
+                  ],
+                ),
               ],
             ),
-            Text(subtitle,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.textSecondary)),
-            const SizedBox(height: AppSpacing.md),
-            capture == null
-                ? Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _pick(role, camera: true),
-                          icon: const Icon(Icons.camera_alt_outlined, size: 18),
-                          label: const Text('拍照'),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.sm),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _pick(role, camera: false),
-                          icon: const Icon(Icons.photo_library_outlined, size: 18),
-                          label: const Text('上传'),
-                        ),
-                      ),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(AppRadius.control),
-                        child: Image.file(
-                            File(capture.calibratedPath ?? capture.imagePath),
-                            height: 180,
-                            width: double.infinity,
-                            fit: BoxFit.cover),
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                      Row(
-                        children: <Widget>[
-                          Icon(
-                            capture.whiteR == null
-                                ? Icons.error_outline
-                                : Icons.check_circle_outline,
-                            size: 16,
-                            color: capture.whiteR == null
-                                ? AppColors.warning
-                                : AppColors.success,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            capture.whiteR == null
-                                ? '未标定（点右上角框选白纸）'
-                                : '白点 (${capture.whiteR}, ${capture.whiteG}, ${capture.whiteB})',
-                            style: const TextStyle(
-                                fontSize: 12, color: AppColors.textSecondary),
-                          ),
-                          const Spacer(),
-                          TextButton(
-                            onPressed: () => _pick(role, camera: false),
-                            child: const Text('换图'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniBtn(String label, VoidCallback onTap, {Color? color}) {
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        minimumSize: const Size(0, 30),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        foregroundColor: color,
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 12)),
+    );
+  }
+
+  Widget _thumbPlaceholder() {
+    return Container(
+      width: 84,
+      height: 84,
+      decoration: BoxDecoration(
+        color: AppColors.line(context),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Icon(Icons.image_outlined,
+          size: 28, color: AppColors.textHint),
+    );
+  }
+
+  Future<void> _addTarget() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (BuildContext ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('拍照'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pick('target', camera: true);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('从相册上传'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pick('target', camera: false);
+              },
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _targetCard(Capture target) {
-    final Comparison? comparison = _detail?.comparisons[target.id];
-    return Card(
-      margin: const EdgeInsets.only(bottom: AppSpacing.md),
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Text('#${target.id.substring(0, 4)}',
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600)),
-                const SizedBox(width: 8),
-                if (comparison != null)
-                  Text('ΔE ${comparison.deltaE}',
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.success)),
-                const Spacer(),
-                IconButton(
-                  onPressed: () => _calibrate(target),
-                  icon: const Icon(Icons.crop_free, size: 20),
-                ),
-                IconButton(
-                  onPressed: _busy ? null : () => _compareOne(target),
-                  icon: const Icon(Icons.compare, size: 20),
-                ),
-              ],
-            ),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(AppRadius.control),
-              child: Image.file(
-                File(comparison?.processedPath ??
-                    target.calibratedPath ??
-                    target.imagePath),
-                height: 160,
-                width: double.infinity,
-                fit: BoxFit.cover,
+  /// 结果区：并排大图 + ΔE，点图全屏。
+  Widget _resultSection(SessionDetail detail) {
+    final Capture? reference = detail.reference;
+    final List<Capture> comparedTargets = detail.targets
+        .where((Capture t) => detail.comparisons.containsKey(t.id))
+        .toList();
+    if (reference == null || comparedTargets.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final Capture target = comparedTargets.first;
+    final Comparison comparison = detail.comparisons[target.id]!;
+    final String refPath = reference.calibratedPath ?? reference.imagePath;
+    final String outPath = comparison.processedPath;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _sectionTitle('对比结果'),
+        GestureDetector(
+          onTap: () => _openViewer(
+            <String>[refPath, outPath],
+            <String>['参照（家里）', '目标（校正后）'],
+            0,
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            child: SizedBox(
+              height: 240,
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Image.file(File(refPath),
+                        fit: BoxFit.cover, alignment: Alignment.center),
+                  ),
+                  Container(width: 2, color: AppColors.line(context)),
+                  Expanded(
+                    child: Image.file(File(outPath),
+                        fit: BoxFit.cover, alignment: Alignment.center),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              target.whiteR == null
-                  ? '未标定'
-                  : '白点 (${target.whiteR}, ${target.whiteG}, ${target.whiteB})'
-                      '${comparison == null ? '' : ' · 已校正'}',
-              style:
-                  const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: <Widget>[
+            const Text('左：家里　右：厂里（已拉平）',
+                style:
+                    TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+            const Spacer(),
+            Text('ΔE ${comparison.deltaE}',
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.success)),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _openViewer(
+                  <String>[refPath, outPath],
+                  <String>['参照（家里）', '目标（校正后）'],
+                  0,
+                ),
+                icon: const Icon(Icons.fullscreen, size: 18),
+                label: const Text('全屏看'),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: _busy ? null : _export,
+                icon: const Icon(Icons.save_alt, size: 18),
+                label: const Text('保存对比图'),
+              ),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }

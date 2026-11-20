@@ -159,6 +159,17 @@ class AppDb {
     );
   }
 
+  /// 删除一张采集，连同它的对比结果。
+  Future<void> deleteCapture(String captureId, String sessionId) async {
+    final Database d = await db;
+    await d.delete(
+      'comparisons',
+      where: 'session_id = ? AND target_capture_id = ?',
+      whereArgs: <Object>[sessionId, captureId],
+    );
+    await d.delete('captures', where: 'id = ?', whereArgs: <Object>[captureId]);
+  }
+
   Future<Map<String, Comparison>> comparisonsOf(String sessionId) async {
     final Database d = await db;
     final List<Map<String, Object?>> rows = await d.query(
