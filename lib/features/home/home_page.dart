@@ -9,6 +9,7 @@ import '../../core/app_theme.dart';
 import '../../core/db.dart';
 import '../../core/models.dart';
 import '../settings/about_page.dart';
+import '../settings/guide_page.dart';
 import 'session_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -86,6 +87,13 @@ class _HomePageState extends State<HomePage> {
       appBar: buildAppBar(context, AppConfigTitle.title, actions: <Widget>[
         IconButton(
           onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const GuidePage()),
+          ),
+          icon: const Icon(Icons.help_outline),
+          tooltip: '怎么用',
+        ),
+        IconButton(
+          onPressed: () => Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const AboutPage()),
           ),
           icon: const Icon(Icons.info_outline),
@@ -113,7 +121,8 @@ class _HomePageState extends State<HomePage> {
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                     SizedBox(height: 8),
                     Text(
-                      '点右下角新建：先拍「家里」的参照，再拍「厂里」的目标，软件会把两边的光拉平。',
+                      '准备一张白纸：主体（瓷砖 / 门窗 / 小样）放中间，白纸放左下角。\n'
+                      '家里拍一张、厂里拍一张，软件会把两边的光拉平，再比颜色。',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 13, height: 1.6, color: AppColors.textSecondary),
                     ),

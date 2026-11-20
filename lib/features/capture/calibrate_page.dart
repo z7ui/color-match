@@ -163,7 +163,7 @@ class _CalibratePageState extends State<CalibratePage> {
                       ],
                       const SizedBox(height: 4),
                       const Text(
-                        '框里只能有白纸/灰卡，别框到瓷砖或阴影。',
+                        '找到照片里的白纸（左下角那块），框住它——不是框主体。',
                         style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
                       ),
                       const SizedBox(height: AppSpacing.md),
