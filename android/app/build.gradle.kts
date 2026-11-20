@@ -53,6 +53,9 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
+            // Dart 代码走 AOT，R8 只处理壳和插件；开着会让打包从 1 分钟变 30 分钟，收益很小
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
