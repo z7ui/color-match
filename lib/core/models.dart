@@ -35,7 +35,6 @@ class Capture {
     required this.source,
     required this.createdAt,
     this.location = '',
-    this.calibratedPath,
     this.whiteR,
     this.whiteG,
     this.whiteB,
@@ -43,35 +42,38 @@ class Capture {
     this.checkR,
     this.checkG,
     this.checkB,
+    this.usedTorch = false,
   });
 
   final String id;
   final String sessionId;
 
-  /// 'reference'（家里，默认基准）或 'target'（厂里 / 其他环境）
+  /// 'reference'（家里，基准）或 'target'（厂里 / 别的环境）
   final String role;
   final String imagePath;
   final String source; // camera / upload
+
+  /// 在哪拍的 / 什么光（多光源复检用）
   final String location;
-  final String? calibratedPath;
   final int? whiteR;
   final int? whiteG;
   final int? whiteB;
-  final String calibrationMethod; // none / white_patch / gray_card / color_checker
+  final String calibrationMethod; // none / white_patch / color_checker
 
-  /// 可选：同一张图里另标的一块「已知物」（灰卡/白卡/同一件样品）的颜色。
-  /// 用来自检：两张图的已知物迁移后还差多少 = 这套流程的误差下限。
+  /// 可选：同一张图里另标的一块「已知物」的颜色（自检用）
   final int? checkR;
   final int? checkG;
   final int? checkB;
 
-  bool get hasChecker => checkR != null && checkG != null && checkB != null;
+  /// 拍这张时有没有开补光（手电筒常亮）
+  final bool usedTorch;
+
   final DateTime createdAt;
 
   bool get isReference => role == 'reference';
   bool get isCalibrated => whiteR != null && whiteG != null && whiteB != null;
+  bool get hasChecker => checkR != null && checkG != null && checkB != null;
 
-  /// 显示用的编号（UUID 前 4 位对用户没有意义，但至少要稳定）。
   String get shortId => id.length >= 4 ? id.substring(0, 4) : id;
 }
 
@@ -93,23 +95,20 @@ class Comparison {
   final String sessionId;
   final String referenceCaptureId;
   final String targetCaptureId;
-
-  /// 把目标图拉到参照基准后的成品图。
   final String processedPath;
 
-  /// 校正后 ΔE00（越小越接近）。
+  /// 校正后 ΔE00（越小越接近）
   final double deltaE;
 
-  /// 校正前 ΔE00（两张原始照片直接比）。
+  /// 校正前 ΔE00（两张原始照片直接比）
   final double deltaEBefore;
 
-  /// 误差下限（0 表示没标已知物，量不出来）。
+  /// 误差下限（0 表示没标已知物，量不出来）
   final double errorFloor;
 
   final String note;
   final DateTime createdAt;
 
-  /// 改善比例，夹在 0..1。
   double get improvement {
     if (deltaEBefore <= 0.01) return 0;
     return ((deltaEBefore - deltaE) / deltaEBefore).clamp(0.0, 1.0);
@@ -117,7 +116,7 @@ class Comparison {
 
   bool get hasErrorFloor => errorFloor > 0;
 
-  /// 扣掉误差下限后的可信差异。
+  /// 扣掉误差下限后的可信差异
   double get trustworthy {
     if (errorFloor <= 0) return deltaE;
     final double v = deltaE * deltaE - errorFloor * errorFloor;
@@ -136,20 +135,15 @@ class SessionDetail {
 
   final CompareSession session;
   final Capture? reference;
-
-  /// 可以有多张目标图（多对一对比）。
   final List<Capture> targets;
 
   /// targetCaptureId -> 对比结果
   final Map<String, Comparison> comparisons;
 
-  Capture? get target => targets.isEmpty ? null : targets.first;
-
   Comparison? comparisonFor(String targetId) => comparisons[targetId];
 
   int get comparedCount => comparisons.length;
 
-  /// 已标定但还没对比的目标数量（「全部对比」按钮上的数字）。
   int get pendingCount => targets
       .where((Capture t) => t.isCalibrated && !comparisons.containsKey(t.id))
       .length;

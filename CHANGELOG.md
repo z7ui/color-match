@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.13] - 2026-11-21
+
+一次把 P0–P2 + 补光 + 后门做完。
+
+### P0 修复
+
+- **会话页数据库异常 → 永久转圈**：`_load()` 补 try/catch 与错误页（含重试）。
+- **「重拍参照」先删后拍**：改成**先拍新的，再问要不要替换**，中途退出不会丢参照。
+- **孤儿成图**：`deleteCapture` / `invalidateComparisons` / `invalidateComparisonOf` /
+  `deleteSession` 现在都回传被删记录的 `processed_path`，UI 层同步删文件；
+  删参照时会连带删掉所有基于它的成图。
+- **死字段 `calibratedPath`**：从模型与读写路径里移除（DB 列保留给老库，不再使用）。
+
+### P1 体验
+
+- **对比详情页**：三张图 + 全部参数（白点、已知物、误差下限、可信差异、光源、补光、时间），
+  支持分享成图、存相册、单独删除这条对比。
+- **导出报告带中文标注**：改用 Flutter Canvas + TextPainter 渲染（`report_renderer.dart`），
+  页眉有会话名/日期/组数，每行有「家里（基准）/工地（原图）/拉到家里光线后」和 ΔE、误差下限、地点。
+  以前用 `image` 包的 arial24，中文会变方块。
+- **批量对比只解码一次参照**：新增 `compareMany`，整批目标一次进 isolate。
+
+### P2 基础设施
+
+- **App 图标**：换成「两块料 + 白纸 + 等号」的品牌图标（5 个密度）。
+- **重命名 / 备注**：首页长按卡片或右上菜单，可改名称与备注（`updateSession` 终于有人调用）。
+- **空状态**：首页空列表加了「新建第一个对比」按钮；会话空目标给了更具体的提示。
+- **CSV / JSON 导出**：`DataExporter`，CSV 带 BOM（Excel 中文不乱码）。
+- **数据库备份 / 恢复**：`AppDb.backupTo` / `restoreFrom`（先关库再拷文件），
+  数据管理页面可备份、列出历史备份、一键恢复。
+
+### 补光
+
+- 采集页新增**补光开关**（torch 常亮，不是按下快门闪一下），拍完把「是否补光」记进数据库
+  （`used_torch`），列表和详情页都会显示。
+
+### 后门（诊断）
+
+- **ADB**：`adb shell am start -a com.z7ui.color_match.DIAG -n com.z7ui.color_match/.MainActivity --es cmd stats`
+  → MainActivity 通过 MethodChannel 交给 Dart，结果显示在对话框里。
+- **口令控制台**：关于页连点版本号 7 次 → 输口令 `cm-diag`。
+- 白名单命令：`help / stats / dump-db / export-csv / export-json / clean-cache / vacuum`；
+  `clean-cache` 会清临时目录 **并删掉数据库里没人引用的孤儿图片**。
+- 任意 `shell <命令>` **只在 debug 构建开放**，release 直接拒绝。
+
+### 工程
+
+- DB 升到 v4（`captures.used_torch`，带迁移）。
+
 ## [0.1.12] - 2026-11-21
 
 ### 新增：自检（误差下限）

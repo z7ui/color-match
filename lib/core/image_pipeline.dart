@@ -9,17 +9,13 @@ import 'compare.dart';
 
 /// 图像重活全都在后台 isolate 里做。
 ///
-/// 之前解码、逐像素白平衡、JPEG 编码、拼图、导出全都跑在 UI 线程上：
-/// 一张 12MP 的照片就能卡 1-2 秒，批量对比基本必 ANR。
+/// 约定：入参和返回值只用「可跨 isolate 传输」的类型（Map / List / String /
+/// int / double / Uint8List），不用自定义类。
 ///
-/// 约定：入参和返回值只用「可跨 isolate 传输」的类型
-/// （Map / List / String / int / double / Uint8List），不用自定义类。
-///
-/// 注意：**标定不再生成「校正后的照片」**。白点只是测出来的一个数值，
+/// 注意：**标定不生成「校正后的照片」**。白点只是测出来的一个数值，
 /// 家里那张作为基准永远保持原样，工地那张在「对比」时临时拉到家里的白点。
 const int kPreviewSide = 1200; // 标定页预览/采样用的长边
-const int kCompareSide = 1400; // 对比计算用的长边（与 downscale 默认值一致）
-const int kReportSide = 1000; // 导出拼图每张的长边
+const int kReportSide = 1200; // 导出拼图每张的长边
 
 /// 把手机原图解码、按 EXIF 摆正、缩到预览尺寸，返回 JPEG 字节。
 Uint8List _decodePreview(Map<String, Object?> arg) {
@@ -33,162 +29,185 @@ Uint8List _decodePreview(Map<String, Object?> arg) {
   return img.encodeJpg(small, quality: 88);
 }
 
-/// 一次对比：读「家里的原图 + 工地的原图」-> 算 ΔE -> 输出「工地拉到家里光线」的 JPEG。
-/// 家里那张只读，绝不改写。
-Map<String, Object?> _compare(Map<String, Object?> arg) {
-  final String refRawPath = arg['refRaw']! as String;
-  final String targetPath = arg['target']! as String;
+double _num(Map<Object?, Object?> map, String key) =>
+    (map[key]! as num).toDouble();
+
+int? _intOrNull(Map<Object?, Object?> map, String key) {
+  final Object? v = map[key];
+  return v == null ? null : (v as num).toInt();
+}
+
+/// 批量对比：**参照图只解码一次**，然后依次处理每个目标。
+///
+/// 以前每个目标各调一次 compute，3 个目标就把参照图解码 3 遍；
+/// 现在一次调用处理整批，最后一次性回传所有「拉平后」的图。
+List<Object?> _compareMany(Map<String, Object?> arg) {
+  final String refPath = arg['ref']! as String;
   final double rr = (arg['refR']! as num).toDouble();
   final double rg = (arg['refG']! as num).toDouble();
   final double rb = (arg['refB']! as num).toDouble();
-  final double tr = (arg['targetR']! as num).toDouble();
-  final double tg = (arg['targetG']! as num).toDouble();
-  final double tb = (arg['targetB']! as num).toDouble();
-  // 已知物（可选）：同一次拍摄里的另一件已知颜色，用来自检
-  final num? rcr = arg['refCheckR'] as num?;
-  final num? rcg = arg['refCheckG'] as num?;
-  final num? rcb = arg['refCheckB'] as num?;
-  final num? tcr = arg['targetCheckR'] as num?;
-  final num? tcg = arg['targetCheckG'] as num?;
-  final num? tcb = arg['targetCheckB'] as num?;
-  final WhitePoint? refChecker = (rcr != null && rcg != null && rcb != null)
-      ? WhitePoint(rcr.toDouble(), rcg.toDouble(), rcb.toDouble())
-      : null;
-  final WhitePoint? targetChecker = (tcr != null && tcg != null && tcb != null)
-      ? WhitePoint(tcr.toDouble(), tcg.toDouble(), tcb.toDouble())
-      : null;
+  final int? rcr = arg['refCheckR'] as int?;
+  final int? rcg = arg['refCheckG'] as int?;
+  final int? rcb = arg['refCheckB'] as int?;
+  final List<Object?> targets = arg['targets']! as List<Object?>;
 
-  final img.Image? refRaw =
-      decodeOriented(File(refRawPath).readAsBytesSync());
-  final img.Image? target =
-      decodeOriented(File(targetPath).readAsBytesSync());
-  if (refRaw == null || target == null) {
-    throw const FormatException('图片无法解码');
-  }
-
-  final CompareResult result = compareToReference(
-    reference: downscale(refRaw),
-    targetRaw: downscale(target),
-    referenceWhite: WhitePoint(rr, rg, rb),
-    targetWhite: WhitePoint(tr, tg, tb),
-    referenceChecker: refChecker,
-    targetChecker: targetChecker,
-  );
-
-  return <String, Object?>{
-    'jpeg': img.encodeJpg(result.processed, quality: 92),
-    'deltaE': result.deltaEAfter,
-    'deltaEBefore': result.deltaEBefore,
-    'improvement': result.improvement,
-    'errorFloor': result.errorFloor ?? 0.0,
-    'trustworthy': result.trustworthy,
-  };
-}
-
-/// 导出报告：每行「参照 | 目标原图 | 目标校正后」+ 一行 ASCII 标签。
-Uint8List _report(Map<String, Object?> arg) {
-  final String refPath = arg['ref']! as String;
-  final List<Object?> rows = arg['rows']! as List<Object?>;
-
-  final img.Image? refImage =
-      decodeOriented(File(refPath).readAsBytesSync());
-  if (refImage == null) {
+  final img.Image? refRaw = decodeOriented(File(refPath).readAsBytesSync());
+  if (refRaw == null) {
     throw const FormatException('参照图无法解码');
   }
-  final img.Image ref = downscale(refImage, maxSide: kReportSide);
+  final img.Image ref = downscale(refRaw);
+  final WhitePoint referenceWhite = WhitePoint(rr, rg, rb);
+  final WhitePoint? referenceChecker =
+      (rcr != null && rcg != null && rcb != null)
+          ? WhitePoint(rcr.toDouble(), rcg.toDouble(), rcb.toDouble())
+          : null;
 
-  final List<img.Image> built = <img.Image>[];
-  for (final Object? item in rows) {
-    final Map<Object?, Object?> row = item! as Map<Object?, Object?>;
-    final img.Image? before =
-        decodeOriented(File(row['before']! as String).readAsBytesSync());
-    final img.Image? after =
-        decodeOriented(File(row['after']! as String).readAsBytesSync());
-    if (before == null || after == null) continue;
-    built.add(buildRow(
-      reference: ref,
-      before: downscale(before, maxSide: kReportSide),
-      after: downscale(after, maxSide: kReportSide),
-      label: (row['label'] as String?) ?? '',
-    ));
+  final List<Object?> results = <Object?>[];
+  for (final Object? item in targets) {
+    final Map<Object?, Object?> t = item! as Map<Object?, Object?>;
+    final String path = t['path']! as String;
+    try {
+      final img.Image? target = decodeOriented(File(path).readAsBytesSync());
+      if (target == null) throw const FormatException('目标图无法解码');
+
+      final int? tcr = _intOrNull(t, 'checkR');
+      final int? tcg = _intOrNull(t, 'checkG');
+      final int? tcb = _intOrNull(t, 'checkB');
+      final WhitePoint? targetChecker =
+          (tcr != null && tcg != null && tcb != null)
+              ? WhitePoint(tcr.toDouble(), tcg.toDouble(), tcb.toDouble())
+              : null;
+
+      final CompareResult result = compareToReference(
+        reference: ref,
+        targetRaw: downscale(target),
+        referenceWhite: referenceWhite,
+        targetWhite: WhitePoint(_num(t, 'r'), _num(t, 'g'), _num(t, 'b')),
+        referenceChecker: referenceChecker,
+        targetChecker: targetChecker,
+      );
+
+      results.add(<String, Object?>{
+        'id': t['id'],
+        'ok': true,
+        'jpeg': img.encodeJpg(result.processed, quality: 92),
+        'deltaE': result.deltaEAfter,
+        'deltaEBefore': result.deltaEBefore,
+        'errorFloor': result.errorFloor ?? 0.0,
+        'trustworthy': result.trustworthy,
+      });
+    } catch (error) {
+      results.add(<String, Object?>{
+        'id': t['id'],
+        'ok': false,
+        'error': error.toString(),
+      });
+    }
   }
-  return img.encodeJpg(buildVerticalReport(built), quality: 92);
+  return results;
 }
 
 // ---------------------------------------------------------------- 对外接口
 
 Future<Uint8List> decodePreviewBytes(Uint8List bytes,
         {int maxSide = kPreviewSide}) =>
-    compute(_decodePreview, <String, Object?>{'bytes': bytes, 'maxSide': maxSide});
+    compute(_decodePreview, <String, Object?>{
+      'bytes': bytes,
+      'maxSide': maxSide,
+    });
 
 class CompareOutcome {
   const CompareOutcome({
-    required this.jpeg,
-    required this.deltaE,
-    required this.deltaEBefore,
-    required this.improvement,
+    required this.targetId,
+    required this.ok,
+    this.jpeg,
+    this.deltaE = 0,
+    this.deltaEBefore = 0,
     this.errorFloor = 0,
-    required this.trustworthy,
+    this.trustworthy = 0,
+    this.error,
   });
 
-  final Uint8List jpeg;
+  final String targetId;
+  final bool ok;
+  final Uint8List? jpeg;
   final double deltaE;
   final double deltaEBefore;
-  final double improvement;
-
-  /// 误差下限（0 表示这一组没标已知物）
   final double errorFloor;
-
-  /// 扣掉误差下限后的可信差异
   final double trustworthy;
+  final String? error;
 
   bool get hasFloor => errorFloor > 0;
 }
 
-Future<CompareOutcome> compareFiles({
-  required String referenceRawPath,
-  required String targetPath,
-  required int refR,
-  required int refG,
-  required int refB,
-  required int targetR,
-  required int targetG,
-  required int targetB,
-  int? refCheckR,
-  int? refCheckG,
-  int? refCheckB,
-  int? targetCheckR,
-  int? targetCheckG,
-  int? targetCheckB,
-}) async {
-  final Map<String, Object?> out = await compute(_compare, <String, Object?>{
-    'refRaw': referenceRawPath,
-    'target': targetPath,
-    'refR': refR,
-    'refG': refG,
-    'refB': refB,
-    'targetR': targetR,
-    'targetG': targetG,
-    'targetB': targetB,
-    'refCheckR': refCheckR,
-    'refCheckG': refCheckG,
-    'refCheckB': refCheckB,
-    'targetCheckR': targetCheckR,
-    'targetCheckG': targetCheckG,
-    'targetCheckB': targetCheckB,
+/// 一次对比请求（单个目标）。
+class CompareTask {
+  const CompareTask({
+    required this.targetId,
+    required this.path,
+    required this.whiteR,
+    required this.whiteG,
+    required this.whiteB,
+    this.checkR,
+    this.checkG,
+    this.checkB,
   });
-  return CompareOutcome(
-    jpeg: out['jpeg']! as Uint8List,
-    deltaE: (out['deltaE']! as num).toDouble(),
-    deltaEBefore: (out['deltaEBefore']! as num).toDouble(),
-    improvement: (out['improvement']! as num).toDouble(),
-    errorFloor: (out['errorFloor']! as num).toDouble(),
-    trustworthy: (out['trustworthy']! as num).toDouble(),
-  );
+
+  final String targetId;
+  final String path;
+  final int whiteR;
+  final int whiteG;
+  final int whiteB;
+  final int? checkR;
+  final int? checkG;
+  final int? checkB;
+
+  Map<String, Object?> toMap() => <String, Object?>{
+        'id': targetId,
+        'path': path,
+        'r': whiteR,
+        'g': whiteG,
+        'b': whiteB,
+        'checkR': checkR,
+        'checkG': checkG,
+        'checkB': checkB,
+      };
 }
 
-Future<Uint8List> buildReportBytes({
+/// 批量对比：一次 isolate 调用处理所有目标（参照图只解码一遍）。
+Future<List<CompareOutcome>> compareMany({
   required String referencePath,
-  required List<Map<String, Object?>> rows,
-}) =>
-    compute(_report, <String, Object?>{'ref': referencePath, 'rows': rows});
+  required int referenceR,
+  required int referenceG,
+  required int referenceB,
+  int? referenceCheckR,
+  int? referenceCheckG,
+  int? referenceCheckB,
+  required List<CompareTask> tasks,
+}) async {
+  if (tasks.isEmpty) return <CompareOutcome>[];
+  final List<Object?> raw = await compute(_compareMany, <String, Object?>{
+    'ref': referencePath,
+    'refR': referenceR,
+    'refG': referenceG,
+    'refB': referenceB,
+    'refCheckR': referenceCheckR,
+    'refCheckG': referenceCheckG,
+    'refCheckB': referenceCheckB,
+    'targets': tasks.map((CompareTask t) => t.toMap()).toList(),
+  });
+  return raw.map((Object? item) {
+    final Map<Object?, Object?> m = item! as Map<Object?, Object?>;
+    final bool ok = m['ok'] == true;
+    return CompareOutcome(
+      targetId: m['id']! as String,
+      ok: ok,
+      jpeg: ok ? m['jpeg']! as Uint8List : null,
+      deltaE: ok ? _num(m, 'deltaE') : 0,
+      deltaEBefore: ok ? _num(m, 'deltaEBefore') : 0,
+      errorFloor: ok ? _num(m, 'errorFloor') : 0,
+      trustworthy: ok ? _num(m, 'trustworthy') : 0,
+      error: ok ? null : m['error'] as String?,
+    );
+  }).toList();
+}

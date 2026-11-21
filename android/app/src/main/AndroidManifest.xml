@@ -31,6 +31,12 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- 后门：adb shell am start 带上 action com.z7ui.color_match.DIAG 与 cmd 参数
+                 （XML 注释里不能出现连续两个减号，所以这里不写完整命令） -->
+            <intent-filter>
+                <action android:name="com.z7ui.color_match.DIAG"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -5,6 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_theme.dart';
 import '../../core/config.dart';
 import '../../core/net.dart';
+import 'backup_page.dart';
+import 'diag_page.dart';
 import 'permissions_page.dart';
 
 class AboutPage extends StatefulWidget {
@@ -18,6 +20,7 @@ class _AboutPageState extends State<AboutPage> {
   bool _checking = false;
   String? _updateText;
   String? _announcement;
+  int _versionTaps = 0;
 
   Future<void> _checkUpdate() async {
     setState(() {
@@ -125,9 +128,19 @@ class _AboutPageState extends State<AboutPage> {
                     style:
                         TextStyle(fontSize: 13, color: AppColors.textSecondary)),
                 const SizedBox(height: 4),
-                Text('v${AppConfig.appVersion} (${AppConfig.buildNumber})',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary)),
+                GestureDetector(
+                  onTap: () {
+                    _versionTaps++;
+                    if (_versionTaps >= 7) {
+                      _versionTaps = 0;
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => const DiagPage()));
+                    }
+                  },
+                  child: Text('v' + AppConfig.appVersion + ' (' + AppConfig.buildNumber.toString() + ')',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary)),
+                ),
               ],
             ),
           ),
@@ -166,6 +179,17 @@ class _AboutPageState extends State<AboutPage> {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                         builder: (_) => const PermissionsPage()),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.storage_outlined),
+                  title: const Text('数据管理'),
+                  subtitle: const Text('备份 / 恢复 / 导出 CSV、JSON'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => const BackupPage()),
                   ),
                 ),
               ],

@@ -1,6 +1,16 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+/// 拍照结果：文件路径 + 当时有没有开补光（手电筒常亮）。
+///
+/// 为什么要记：补光会改变光源光谱和照度，之后看数据必须知道这张是不是补光拍的。
+class CaptureOutcome {
+  const CaptureOutcome({required this.path, required this.usedTorch});
+
+  final String path;
+  final bool usedTorch;
+}
+
 /// 拍照页：全屏预览 + 构图指示（中间一个主体框，左下角白纸框）。
 ///
 /// 两个稳定性要点：
@@ -25,6 +35,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   bool _ready = false;
   bool _busy = false;
   bool _switching = false;
+  bool _torch = false;
   String? _error;
 
   @override
@@ -100,6 +111,21 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     }
   }
 
+  /// 补光开关：torch = 常亮（像手电筒），比「按下快门闪一下」安全得多。
+  Future<void> _toggleTorch() async {
+    final CameraController? controller = _controller;
+    if (controller == null) return;
+    final bool next = !_torch;
+    try {
+      await controller.setFlashMode(next ? FlashMode.torch : FlashMode.off);
+      if (!mounted) return;
+      setState(() => _torch = next);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = '补光打不开：' + error.toString());
+    }
+  }
+
   Future<void> _shoot() async {
     final CameraController? controller = _controller;
     if (controller == null || !controller.value.isInitialized || _busy) return;
@@ -107,7 +133,8 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     try {
       final XFile file = await controller.takePicture();
       if (!mounted) return;
-      Navigator.of(context).pop(file.path);
+      Navigator.of(context)
+          .pop(CaptureOutcome(path: file.path, usedTorch: _torch));
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -137,6 +164,14 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         foregroundColor: Colors.white,
         title: Text(isReference ? '拍参照（家里）' : '拍目标（厂里）'),
         actions: <Widget>[
+          IconButton(
+            onPressed: _busy ? null : _toggleTorch,
+            icon: Icon(
+              _torch ? Icons.flashlight_on : Icons.flashlight_off,
+              color: _torch ? Colors.amber : Colors.white,
+            ),
+            tooltip: _torch ? '补光：开' : '补光：关',
+          ),
           if (_cameras.length > 1)
             IconButton(
               onPressed: _switching ? null : () => _open((_index + 1) % _cameras.length),

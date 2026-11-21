@@ -13,17 +13,20 @@ import '../../core/calibration.dart';
 import '../../core/db.dart';
 import '../../core/image_pipeline.dart';
 import '../../core/models.dart';
+import '../../core/report_renderer.dart';
 import '../../core/storage.dart';
 import '../capture/capture_page.dart';
 import '../capture/calibrate_page.dart';
 import '../viewer/photo_view_page.dart';
+import 'comparison_detail_page.dart';
 
-/// 会话详情：一个参照（家里）+ 多个目标（厂里 / 其他环境）。
+/// 会话详情：一个参照（家里，基准）+ 多个目标（厂里 / 别的环境）。
 ///
-/// 三条约定：
+/// 四条约定：
 /// * 图像重活全部走 image_pipeline（后台 isolate），UI 线程不解码大图；
-/// * 重新标定 / 换参照图会让旧的对比结果失效，不会一边改白点一边留着旧 ΔE；
-/// * 任何耗时操作期间，行内按钮一起禁用，避免并发解码和并发写库。
+/// * 家里那张**永远是原图**，只当基准；只把工地那张拉到家里的光线；
+/// * 重新标定 / 换参照图会让旧对比失效，**并连带删掉旧成图文件**；
+/// * 任何耗时操作期间，行内按钮一起禁用。
 class SessionPage extends StatefulWidget {
   const SessionPage({super.key, required this.sessionId});
 
@@ -37,6 +40,7 @@ class _SessionPageState extends State<SessionPage> {
   SessionDetail? _detail;
   bool _busy = false;
   String? _progress;
+  String? _loadError;
   int _resultIndex = 0;
   bool _showBefore = false;
 
@@ -47,9 +51,18 @@ class _SessionPageState extends State<SessionPage> {
   }
 
   Future<void> _load() async {
-    final SessionDetail? detail = await AppDb.instance.detail(widget.sessionId);
-    if (!mounted) return;
-    setState(() => _detail = detail);
+    try {
+      final SessionDetail? detail =
+          await AppDb.instance.detail(widget.sessionId);
+      if (!mounted) return;
+      setState(() {
+        _detail = detail;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadError = error.toString());
+    }
   }
 
   // ------------------------------------------------------------ 采集
@@ -57,22 +70,24 @@ class _SessionPageState extends State<SessionPage> {
   Future<void> _pick(String role, {required bool camera}) async {
     if (_busy) return;
     if (camera) {
-      final String? path = await Navigator.of(context).push<String>(
-        MaterialPageRoute<String>(
+      final CaptureOutcome? outcome =
+          await Navigator.of(context).push<CaptureOutcome>(
+        MaterialPageRoute<CaptureOutcome>(
           builder: (_) => CapturePage(role: role, sessionId: widget.sessionId),
         ),
       );
-      if (path == null || !mounted) return;
-      await _saveCapture(role, path, 'camera');
+      if (outcome == null || !mounted) return;
+      await _saveCapture(role, outcome.path, 'camera', outcome.usedTorch);
       return;
     }
     final XFile? picked =
         await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 2400);
     if (picked == null || !mounted) return;
-    await _saveCapture(role, picked.path, 'upload');
+    await _saveCapture(role, picked.path, 'upload', false);
   }
 
-  Future<void> _saveCapture(String role, String sourcePath, String source) async {
+  Future<void> _saveCapture(
+      String role, String sourcePath, String source, bool usedTorch) async {
     final Directory dir = await getApplicationDocumentsDirectory();
     final String id = const Uuid().v4();
     final String ext =
@@ -96,6 +111,7 @@ class _SessionPageState extends State<SessionPage> {
       role: role,
       imagePath: dest,
       source: source,
+      usedTorch: usedTorch,
       createdAt: DateTime.now(),
     ));
     await _load();
@@ -105,7 +121,7 @@ class _SessionPageState extends State<SessionPage> {
 
   /// 给这张图打个「光」的标签：同一块样品换几个光源拍，才能看出是不是同色异谱。
   Future<void> _askLocation(String captureId) async {
-    final List<String> presets = <String>[
+    const List<String> presets = <String>[
       '家里·顶灯',
       '家里·窗边自然光',
       '门店·射灯',
@@ -126,10 +142,10 @@ class _SessionPageState extends State<SessionPage> {
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
             ),
-            ...presets.map((String p) => ListTile(
+            ...presets.map((String value) => ListTile(
                   dense: true,
-                  title: Text(p, style: const TextStyle(fontSize: 14)),
-                  onTap: () => Navigator.pop(ctx, p),
+                  title: Text(value, style: const TextStyle(fontSize: 14)),
+                  onTap: () => Navigator.pop(ctx, value),
                 )),
             ListTile(
               dense: true,
@@ -178,54 +194,62 @@ class _SessionPageState extends State<SessionPage> {
     await _load();
   }
 
-  /// 换参照图：替换而不是再插一张。
-  ///
-  /// 以前「换图」是追加一条 reference，而详情页只认第一条，于是换了等于没换，
-  /// 数据库里还留着一张看不见的参照。
+  /// 换参照图：**先拍新的，再问要不要替换**（以前是先删后拍，中途退出参照就没了）。
   Future<void> _replaceReference() async {
-    final Capture? old = _detail?.reference;
-    final bool? ok = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('重拍参照图？'),
-        content: const Text('旧参照图、以及所有基于它的对比结果都会被删掉。'),
-        actions: <Widget>[
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
-            child: const Text('重拍'),
-          ),
-        ],
+    if (_busy) return;
+    final CaptureOutcome? outcome =
+        await Navigator.of(context).push<CaptureOutcome>(
+      MaterialPageRoute<CaptureOutcome>(
+        builder: (_) =>
+            CapturePage(role: 'reference', sessionId: widget.sessionId),
       ),
     );
-    if (ok != true || !mounted) return;
+    if (outcome == null || !mounted) return;
+
+    final Capture? old = _detail?.reference;
     if (old != null) {
+      final bool? ok = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          title: const Text('替换参照图？'),
+          content: const Text('旧参照图、以及所有基于它的对比结果都会被删掉。'),
+          actions: <Widget>[
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('保留旧的')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+              child: const Text('替换'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) {
+        await _deleteQuietly(outcome.path);
+        return;
+      }
       await _deleteCaptureAndFiles(old);
     }
     if (!mounted) return;
-    await _pick('reference', camera: true);
+    await _saveCapture('reference', outcome.path, 'camera', outcome.usedTorch);
   }
 
+  /// 删一张图：DB 会回传所有相关成图路径，文件和行一起清干净。
   Future<void> _deleteCaptureAndFiles(Capture capture) async {
-    final SessionDetail? detail = _detail;
-    final List<String> extra = <String>[];
-    final Comparison? own = detail?.comparisons[capture.id];
-    if (own != null) extra.add(own.processedPath);
-
-    await AppDb.instance.deleteCapture(capture.id, widget.sessionId);
-    for (final String? path in <String?>[
-      capture.imagePath,
-      capture.calibratedPath,
-      ...extra,
-    ]) {
-      if (path == null) continue;
-      try {
-        final File f = File(path);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
+    final List<String> processed =
+        await AppDb.instance.deleteCapture(capture.id, widget.sessionId);
+    await _deleteQuietly(capture.imagePath);
+    for (final String path in processed) {
+      await _deleteQuietly(path);
     }
+  }
+
+  Future<void> _deleteQuietly(String path) async {
+    try {
+      final File file = File(path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
   }
 
   Future<void> _confirmDelete(Capture capture) async {
@@ -239,7 +263,8 @@ class _SessionPageState extends State<SessionPage> {
             : '对应的对比结果会一起删掉。'),
         actions: <Widget>[
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
@@ -249,7 +274,6 @@ class _SessionPageState extends State<SessionPage> {
       ),
     );
     if (ok != true) return;
-
     await _deleteCaptureAndFiles(capture);
     await _load();
     if (mounted) showSnack(context, '已删除');
@@ -278,9 +302,7 @@ class _SessionPageState extends State<SessionPage> {
       _progress = '标定中…';
     });
     try {
-      // 只记白点这一个数值，**不生成、不改写任何照片**。
-      // 家里那张是基准，颜色必须保持现场看到的样子；工地那张在对比时才临时拉过来。
-      // 旧版本会写一张 _calibrated.jpg，等于把要对比的照片改了色 —— 已废弃。
+      // 只记白点与已知物这两个数值，**不生成、不改写任何照片**。
       await AppDb.instance.updateCaptureCalibration(
         capture.id,
         whiteR: white.r.round(),
@@ -290,25 +312,20 @@ class _SessionPageState extends State<SessionPage> {
         checkG: checker?.g.round(),
         checkB: checker?.b.round(),
       );
-      // 顺手清掉旧版本留下的校正图，别让界面再读到它
-      final String stale = p.join(
-          (await getApplicationDocumentsDirectory()).path,
-          'captures',
-          widget.sessionId,
-          capture.id + '_calibrated.jpg');
-      try {
-        final File staleFile = File(stale);
-        if (await staleFile.exists()) await staleFile.delete();
-      } catch (_) {}
-      // 白点变了，旧结果必须失效，否则界面会拿新白点配旧 ΔE
-      if (capture.isReference) {
-        await AppDb.instance.invalidateComparisons(widget.sessionId);
-      } else {
-        await AppDb.instance.invalidateComparisonOf(widget.sessionId, capture.id);
+      // 白点变了，旧结果必须失效，成图文件一起删
+      final List<String> stale = capture.isReference
+          ? await AppDb.instance.invalidateComparisons(widget.sessionId)
+          : await AppDb.instance
+              .invalidateComparisonOf(widget.sessionId, capture.id);
+      for (final String path in stale) {
+        await _deleteQuietly(path);
       }
       _resultIndex = 0;
       await _load();
-      if (mounted) showSnack(context, '已记录白点 ' + white.toString() + '（照片不会被改动）');
+      if (mounted) {
+        showSnack(
+            context, '已记录白点 ' + white.toString() + '（照片不会被改动）');
+      }
     } catch (error) {
       if (mounted) showSnack(context, '标定失败：' + error.toString(), error: true);
     } finally {
@@ -323,40 +340,53 @@ class _SessionPageState extends State<SessionPage> {
 
   // ------------------------------------------------------------ 对比
 
-  Future<void> _runCompare(Capture reference, Capture target) async {
-    final CompareOutcome outcome = await compareFiles(
-      referenceRawPath: reference.imagePath,
-      targetPath: target.imagePath,
-      refR: reference.whiteR!,
-      refG: reference.whiteG!,
-      refB: reference.whiteB!,
-      targetR: target.whiteR!,
-      targetG: target.whiteG!,
-      targetB: target.whiteB!,
-      refCheckR: reference.checkR,
-      refCheckG: reference.checkG,
-      refCheckB: reference.checkB,
-      targetCheckR: target.checkR,
-      targetCheckG: target.checkG,
-      targetCheckB: target.checkB,
+  /// 一批目标一次算完：参照图只解码一遍，结果一起回传。
+  Future<int> _runBatch(Capture reference, List<Capture> targets) async {
+    final List<CompareTask> tasks = <CompareTask>[
+      for (final Capture t in targets)
+        CompareTask(
+          targetId: t.id,
+          path: t.imagePath,
+          whiteR: t.whiteR!,
+          whiteG: t.whiteG!,
+          whiteB: t.whiteB!,
+          checkR: t.checkR,
+          checkG: t.checkG,
+          checkB: t.checkB,
+        ),
+    ];
+    final List<CompareOutcome> outcomes = await compareMany(
+      referencePath: reference.imagePath,
+      referenceR: reference.whiteR!,
+      referenceG: reference.whiteG!,
+      referenceB: reference.whiteB!,
+      referenceCheckR: reference.checkR,
+      referenceCheckG: reference.checkG,
+      referenceCheckB: reference.checkB,
+      tasks: tasks,
     );
 
     final Directory dir = await getApplicationDocumentsDirectory();
-    final String processedPath = p.join(
-        dir.path, 'captures', widget.sessionId, target.id + '_matched.jpg');
-    await File(processedPath).writeAsBytes(outcome.jpeg);
-
-    await AppDb.instance.upsertComparison(Comparison(
-      id: const Uuid().v4(),
-      sessionId: widget.sessionId,
-      referenceCaptureId: reference.id,
-      targetCaptureId: target.id,
-      processedPath: processedPath,
-      deltaE: double.parse(outcome.deltaE.toStringAsFixed(2)),
-      deltaEBefore: double.parse(outcome.deltaEBefore.toStringAsFixed(2)),
-      errorFloor: double.parse(outcome.errorFloor.toStringAsFixed(2)),
-      createdAt: DateTime.now(),
-    ));
+    int done = 0;
+    for (final CompareOutcome outcome in outcomes) {
+      if (!outcome.ok || outcome.jpeg == null) continue;
+      final String processedPath = p.join(dir.path, 'captures',
+          widget.sessionId, outcome.targetId + '_matched.jpg');
+      await File(processedPath).writeAsBytes(outcome.jpeg!);
+      await AppDb.instance.upsertComparison(Comparison(
+        id: const Uuid().v4(),
+        sessionId: widget.sessionId,
+        referenceCaptureId: reference.id,
+        targetCaptureId: outcome.targetId,
+        processedPath: processedPath,
+        deltaE: double.parse(outcome.deltaE.toStringAsFixed(2)),
+        deltaEBefore: double.parse(outcome.deltaEBefore.toStringAsFixed(2)),
+        errorFloor: double.parse(outcome.errorFloor.toStringAsFixed(2)),
+        createdAt: DateTime.now(),
+      ));
+      done++;
+    }
+    return done;
   }
 
   Future<void> _compareOne(Capture target) async {
@@ -375,7 +405,7 @@ class _SessionPageState extends State<SessionPage> {
       _progress = '对比中…';
     });
     try {
-      await _runCompare(reference, target);
+      await _runBatch(reference, <Capture>[target]);
       await _load();
       if (mounted) showSnack(context, '完成');
     } catch (error) {
@@ -400,7 +430,8 @@ class _SessionPageState extends State<SessionPage> {
       return;
     }
     final List<Capture> pending = detail.targets
-        .where((Capture t) => t.isCalibrated && !detail.comparisons.containsKey(t.id))
+        .where((Capture t) =>
+            t.isCalibrated && !detail.comparisons.containsKey(t.id))
         .toList();
     if (pending.isEmpty) {
       showSnack(context, '没有待对比的目标（或都没标定）');
@@ -408,34 +439,36 @@ class _SessionPageState extends State<SessionPage> {
     }
     setState(() {
       _busy = true;
-      _progress = '0/' + pending.length.toString();
+      _progress = '处理 ' + pending.length.toString() + ' 个目标…';
     });
-    int done = 0;
-    int failed = 0;
-    for (final Capture target in pending) {
-      try {
-        await _runCompare(reference, target);
-        done++;
-      } catch (_) {
-        failed++;
+    try {
+      final int done = await _runBatch(reference, pending);
+      await _load();
+      if (!mounted) return;
+      showSnack(
+        context,
+        done == pending.length
+            ? '已对比 ' + done.toString() + ' 个目标'
+            : '完成 ' +
+                done.toString() +
+                ' 个，失败 ' +
+                (pending.length - done).toString() +
+                ' 个',
+        error: done != pending.length,
+      );
+    } catch (error) {
+      if (mounted) showSnack(context, '对比失败：' + error.toString(), error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = null;
+        });
       }
-      final int current = done + failed;
-      if (mounted) setState(() => _progress = current.toString() + '/' + pending.length.toString());
     }
-    await _load();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _progress = null;
-    });
-    showSnack(
-      context,
-      failed == 0 ? '已对比 ' + done.toString() + ' 个目标' : '完成 ' + done.toString() + ' 个，失败 ' + failed.toString() + ' 个',
-      error: failed > 0,
-    );
   }
 
-  // ------------------------------------------------------------ 导出
+  // ------------------------------------------------------------ 详情 / 导出
 
   void _openViewer(List<String> paths, List<String> captions, int index) {
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -447,51 +480,104 @@ class _SessionPageState extends State<SessionPage> {
     ));
   }
 
-  Future<void> _export() async {
-    if (_busy) return;
+  Future<void> _openDetail(Capture target) async {
     final SessionDetail? detail = _detail;
     final Capture? reference = detail?.reference;
-    if (detail == null || reference == null || detail.comparisons.isEmpty) return;
+    final Comparison? comparison = detail?.comparisons[target.id];
+    if (detail == null || reference == null || comparison == null) return;
 
+    final bool? deleted = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => ComparisonDetailPage(
+          sessionName: detail.session.name,
+          reference: reference,
+          target: target,
+          comparison: comparison,
+        ),
+      ),
+    );
+    if (deleted == true) {
+      await AppDb.instance.deleteComparison(widget.sessionId, target.id);
+      await _deleteQuietly(comparison.processedPath);
+      await _load();
+      if (mounted) showSnack(context, '已删除这条对比');
+    }
+  }
+
+  Future<void> _exportAll() async {
+    final SessionDetail? detail = _detail;
+    if (detail == null) return;
+    final Capture? reference = detail.reference;
+    if (reference == null || detail.comparisons.isEmpty) return;
+
+    final List<ReportRow> rows = <ReportRow>[];
+    int index = 0;
+    for (final Capture target in detail.targets) {
+      final Comparison? c = detail.comparisons[target.id];
+      if (c == null) continue;
+      index++;
+      rows.add(_rowFor(detail, reference, target, c, index));
+    }
+    await _renderAndSave(detail.session.name, detail.session.note, rows);
+  }
+
+  Future<void> _exportOne(Capture target) async {
+    final SessionDetail? detail = _detail;
+    final Capture? reference = detail?.reference;
+    final Comparison? c = detail?.comparisons[target.id];
+    if (detail == null || reference == null || c == null) return;
+    await _renderAndSave(
+      detail.session.name,
+      detail.session.note,
+      <ReportRow>[_rowFor(detail, reference, target, c, 1, single: true)],
+    );
+  }
+
+  ReportRow _rowFor(SessionDetail detail, Capture reference, Capture target,
+      Comparison c, int index,
+      {bool single = false}) {
+    return ReportRow(
+      label: single
+          ? '目标 ' + target.shortId
+          : '第 ' + index.toString() + ' 组 · 目标 ' + target.shortId,
+      referencePath: reference.imagePath,
+      beforePath: target.imagePath,
+      afterPath: c.processedPath,
+      deltaE: c.deltaE,
+      deltaEBefore: c.deltaEBefore,
+      errorFloor: c.errorFloor,
+      trustworthy: c.trustworthy,
+      location: target.location,
+      createdAt: c.createdAt,
+    );
+  }
+
+  Future<void> _renderAndSave(
+      String sessionName, String sessionNote, List<ReportRow> rows) async {
+    if (rows.isEmpty) {
+      showSnack(context, '没有可导出的对比', error: true);
+      return;
+    }
     setState(() {
       _busy = true;
       _progress = '生成报告…';
     });
     try {
-      final List<Map<String, Object?>> rows = <Map<String, Object?>>[];
-      int index = 0;
-      for (final Capture target in detail.targets) {
-        final Comparison? comparison = detail.comparisons[target.id];
-        if (comparison == null) continue;
-        index++;
-        rows.add(<String, Object?>{
-          'before': target.imagePath,
-          'after': comparison.processedPath,
-          'label': 'T' + index.toString() + '  dE ' +
-              comparison.deltaEBefore.toString() + ' -> ' + comparison.deltaE.toString(),
-        });
-      }
-      if (rows.isEmpty) {
-        if (mounted) showSnack(context, '没有可导出的对比', error: true);
-        return;
-      }
-
-      final Uint8List jpeg = await buildReportBytes(
-        referencePath: reference.imagePath,
+      final Uint8List png = await renderReportPng(
+        sessionName: sessionName,
+        sessionNote: sessionNote,
         rows: rows,
       );
-
       final Directory dir = await exportDir();
       final String stamp = DateTime.now()
           .toIso8601String()
           .replaceAll(RegExp(r'[:.]'), '-')
           .substring(0, 19);
       final String safeName =
-          detail.session.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-      final String fileName = safeName + '_' + stamp + '.jpg';
+          sessionName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final String fileName = safeName + '_' + stamp + '.png';
       final File file = File(p.join(dir.path, fileName));
-      await file.writeAsBytes(jpeg);
-
+      await file.writeAsBytes(png);
       final bool inGallery = await saveToGallery(file.path);
 
       if (!mounted) return;
@@ -522,9 +608,6 @@ class _SessionPageState extends State<SessionPage> {
                 ],
               ),
               const SizedBox(height: 12),
-              const Text('应用目录（临时，卸载会删）:',
-                  style: TextStyle(fontSize: 12)),
-              const SizedBox(height: 4),
               SelectableText(fileName,
                   style: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600)),
@@ -580,65 +663,101 @@ class _SessionPageState extends State<SessionPage> {
         actions: <Widget>[
           if (detail != null && detail.comparisons.isNotEmpty)
             IconButton(
-              onPressed: _busy ? null : _export,
+              onPressed: _busy ? null : _exportAll,
               icon: const Icon(Icons.save_alt),
-              tooltip: '保存对比图到本地',
+              tooltip: '导出整份报告',
             ),
         ],
       ),
-      body: detail == null
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xl),
-              children: <Widget>[
-                _sectionTitle('参照（家里）'),
-                _captureRow(detail.reference,
-                    role: 'reference', title: '参照图', isReference: true),
-                const SizedBox(height: AppSpacing.md),
-                Row(
-                  children: <Widget>[
-                    _sectionTitle('目标（' + detail.targets.length.toString() + '）'),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: _busy ? null : _addTarget,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('添加'),
-                    ),
-                  ],
-                ),
-                if (detail.targets.isEmpty)
-                  _emptyRow('还没有目标图，点「添加」拍厂里的样品')
-                else
-                  ...detail.targets.map((Capture t) => _captureRow(
-                        t,
-                        role: 'target',
-                        title: '目标 ' + t.shortId,
-                        comparison: detail.comparisons[t.id],
-                      )),
-                const SizedBox(height: AppSpacing.md),
-                if (detail.targets.isNotEmpty)
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _busy ? null : _compareAll,
-                      icon: _busy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.compare),
-                      label: Text(_busy
-                          ? (_progress ?? '处理中…')
-                          : '全部对比（' + detail.pendingCount.toString() + ' 个待处理）'),
-                    ),
-                  ),
-                if (detail.comparisons.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: AppSpacing.lg),
-                  _resultSection(detail),
-                ],
-              ],
+      body: _loadError != null
+          ? _errorView()
+          : detail == null
+              ? const Center(child: CircularProgressIndicator())
+              : _content(detail),
+    );
+  }
+
+  Widget _errorView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            const Icon(Icons.error_outline, size: 48, color: AppColors.danger),
+            const SizedBox(height: 12),
+            const Text('读取这个会话失败',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(_loadError!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.textSecondary)),
+            const SizedBox(height: AppSpacing.lg),
+            FilledButton(
+              onPressed: () {
+                setState(() => _loadError = null);
+                _load();
+              },
+              child: const Text('重试'),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _content(SessionDetail detail) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xl),
+      children: <Widget>[
+        _sectionTitle('参照（家里，基准）'),
+        _captureRow(detail.reference,
+            role: 'reference', title: '参照图', isReference: true),
+        const SizedBox(height: AppSpacing.md),
+        Row(
+          children: <Widget>[
+            _sectionTitle('目标（' + detail.targets.length.toString() + '）'),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _busy ? null : _addTarget,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('添加'),
+            ),
+          ],
+        ),
+        if (detail.targets.isEmpty)
+          _emptyRow('还没有目标图，点「添加」拍厂里的样品。白纸露一个角，最好再放一块已知物（灰卡/样板）用来自检。')
+        else
+          ...detail.targets.map((Capture t) => _captureRow(
+                t,
+                role: 'target',
+                title: '目标 ' + t.shortId,
+                comparison: detail.comparisons[t.id],
+              )),
+        const SizedBox(height: AppSpacing.md),
+        if (detail.targets.isNotEmpty)
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _busy ? null : _compareAll,
+              icon: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.compare),
+              label: Text(_busy
+                  ? (_progress ?? '处理中…')
+                  : '全部对比（' + detail.pendingCount.toString() + ' 个待处理）'),
+            ),
+          ),
+        if (detail.comparisons.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.lg),
+          _resultSection(detail),
+        ],
+      ],
     );
   }
 
@@ -659,7 +778,8 @@ class _SessionPageState extends State<SessionPage> {
         border: Border.all(color: AppColors.line(context)),
       ),
       child: Text(text,
-          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+          style: const TextStyle(
+              fontSize: 12, height: 1.6, color: AppColors.textSecondary)),
     );
   }
 
@@ -704,9 +824,6 @@ class _SessionPageState extends State<SessionPage> {
       );
     }
 
-    // 缩略图永远显示原图：标定只是记了个白点，没有「被改过的版本」要展示
-    final String shown = capture.imagePath;
-
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: const EdgeInsets.all(AppSpacing.sm),
@@ -720,16 +837,13 @@ class _SessionPageState extends State<SessionPage> {
         children: <Widget>[
           GestureDetector(
             onTap: () => _openViewer(
-              <String>[shown, capture.imagePath],
-              <String>[
-                comparison != null ? title + '（校正后）' : title,
-                title + '（原始）',
-              ],
+              <String>[capture.imagePath],
+              <String>[title + '（原图）'],
               0,
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.file(File(shown),
+              child: Image.file(File(capture.imagePath),
                   width: 84,
                   height: 84,
                   cacheWidth: 252,
@@ -761,8 +875,11 @@ class _SessionPageState extends State<SessionPage> {
                           capture.whiteG.toString() + ', ' +
                           capture.whiteB.toString() + ')' +
                           (capture.hasChecker ? '　·　已标已知物' : '') +
-                          (capture.location.isEmpty ? '' : '　·　' + capture.location)
-                      : (capture.location.isEmpty ? '未标定' : '未标定　·　' + capture.location),
+                          (capture.location.isEmpty
+                              ? ''
+                              : '　·　' + capture.location) +
+                          (capture.usedTorch ? '　·　开了补光' : '')
+                      : '未标定',
                   style: TextStyle(
                       fontSize: 11,
                       color: capture.isCalibrated
@@ -775,12 +892,16 @@ class _SessionPageState extends State<SessionPage> {
                         enabled: !_busy),
                     if (isReference)
                       _miniBtn('换图', _replaceReference, enabled: !_busy)
-                    else
+                    else ...<Widget>[
                       _miniBtn(
                         capture.isCalibrated ? '对比' : '对比（先标定）',
                         () => _compareOne(capture),
                         enabled: capture.isCalibrated && !_busy,
                       ),
+                      if (comparison != null)
+                        _miniBtn('详情', () => _openDetail(capture),
+                            enabled: !_busy),
+                    ],
                     _miniBtn('删除', () => _confirmDelete(capture),
                         color: AppColors.danger, enabled: !_busy),
                   ],
@@ -860,19 +981,17 @@ class _SessionPageState extends State<SessionPage> {
       return const SizedBox.shrink();
     }
 
-    // 只算「这一帧该显示第几个」，不在 build 里改 state
     final int index = _resultIndex.clamp(0, comparedTargets.length - 1);
     final Capture target = comparedTargets[index];
     final Comparison comparison = detail.comparisons[target.id]!;
-    // 左边永远是家里那张**原图**，不经过任何处理
-    final String refPath = reference.imagePath;
-    final String outPath = comparison.processedPath;
-    final String rightPath = _showBefore ? target.imagePath : outPath;
+    final String rightPath =
+        _showBefore ? target.imagePath : comparison.processedPath;
     final bool multi = comparedTargets.length > 1;
     final String hint = _showBefore
-        ? '左：家里（已标定）　右：厂里（原始，没拉平）'
-        : '左：家里　右：厂里（已拉平）　·　改善 ' +
-            (comparison.improvement * 100).toStringAsFixed(0) + '%';
+        ? '左：家里（基准）　右：工地原始画面'
+        : '左：家里（基准）　右：工地拉到家里光线后　·　改善 ' +
+            (comparison.improvement * 100).toStringAsFixed(0) +
+            '%';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -894,7 +1013,9 @@ class _SessionPageState extends State<SessionPage> {
                 visualDensity: VisualDensity.compact,
                 tooltip: '上一个目标',
               ),
-              Text((index + 1).toString() + '/' + comparedTargets.length.toString(),
+              Text((index + 1).toString() +
+                  '/' +
+                  comparedTargets.length.toString(),
                   style: const TextStyle(fontSize: 12)),
               IconButton(
                 onPressed: index == comparedTargets.length - 1
@@ -936,12 +1057,12 @@ class _SessionPageState extends State<SessionPage> {
         const SizedBox(height: 6),
         GestureDetector(
           onTap: () => _openViewer(
-            <String>[refPath, rightPath],
+            <String>[reference.imagePath, rightPath],
             <String>[
-              '参照（家里）',
+              '家里（基准）',
               _showBefore
                   ? '目标 ' + target.shortId + '（原始）'
-                  : '目标 ' + target.shortId + '（校正后）'
+                  : '目标 ' + target.shortId + '（拉到家里光线后）'
             ],
             0,
           ),
@@ -952,7 +1073,7 @@ class _SessionPageState extends State<SessionPage> {
               child: Row(
                 children: <Widget>[
                   Expanded(
-                    child: Image.file(File(refPath),
+                    child: Image.file(File(reference.imagePath),
                         cacheWidth: 720, fit: BoxFit.cover),
                   ),
                   Container(width: 2, color: AppColors.line(context)),
@@ -974,8 +1095,8 @@ class _SessionPageState extends State<SessionPage> {
                 onTapUp: (_) => setState(() => _showBefore = false),
                 onTapCancel: () => setState(() => _showBefore = false),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 10, horizontal: 12),
                   decoration: BoxDecoration(
                     color: _showBefore
                         ? AppColors.warning.withValues(alpha: 0.12)
@@ -991,7 +1112,9 @@ class _SessionPageState extends State<SessionPage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: <Widget>[
                       Icon(
-                        _showBefore ? Icons.visibility_off : Icons.visibility,
+                        _showBefore
+                            ? Icons.visibility_off
+                            : Icons.visibility,
                         size: 16,
                         color: _showBefore
                             ? AppColors.warning
@@ -1059,24 +1182,29 @@ class _SessionPageState extends State<SessionPage> {
           children: <Widget>[
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () => _openViewer(
-                  <String>[refPath, outPath],
-                  <String>['参照（家里）', '目标 ' + target.shortId + '（校正后）'],
-                  0,
-                ),
-                icon: const Icon(Icons.fullscreen, size: 18),
-                label: const Text('全屏看'),
+                onPressed: _busy ? null : () => _openDetail(target),
+                icon: const Icon(Icons.info_outline, size: 18),
+                label: const Text('详情'),
               ),
             ),
             const SizedBox(width: AppSpacing.sm),
             Expanded(
-              child: FilledButton.icon(
-                onPressed: _busy ? null : _export,
-                icon: const Icon(Icons.save_alt, size: 18),
-                label: const Text('保存对比图'),
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : () => _exportOne(target),
+                icon: const Icon(Icons.description_outlined, size: 18),
+                label: const Text('导出这组'),
               ),
             ),
           ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: _busy ? null : _exportAll,
+            icon: const Icon(Icons.save_alt, size: 18),
+            label: const Text('导出整份报告'),
+          ),
         ),
       ],
     );

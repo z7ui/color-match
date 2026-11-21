@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/app_theme.dart';
 import '../../core/config.dart';
 import '../../core/db.dart';
+import '../../core/diag.dart';
 import '../../core/models.dart';
 import '../settings/about_page.dart';
 import '../settings/guide_page.dart';
@@ -27,6 +28,40 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _future = AppDb.instance.listSessions();
+    Diag.pending.addListener(_onDiagCommand);
+    // 冷启动时可能已经有命令在排队
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onDiagCommand());
+  }
+
+  @override
+  void dispose() {
+    Diag.pending.removeListener(_onDiagCommand);
+    super.dispose();
+  }
+
+  /// ADB 触发的命令：跑完用对话框把结果摊开（不占 UI，也不依赖控制台页面）。
+  Future<void> _onDiagCommand() async {
+    final String? command = Diag.pending.value;
+    if (command == null || command.isEmpty) return;
+    Diag.pending.value = null;
+    final String result = await Diag.run(command);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text('诊断 · ' + command),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            result,
+            style: const TextStyle(fontSize: 12, height: 1.5),
+          ),
+        ),
+        actions: <Widget>[
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('好')),
+        ],
+      ),
+    );
   }
 
   void _reload() {
@@ -83,6 +118,53 @@ class _HomePageState extends State<HomePage> {
     );
     if (!mounted) return;
     _reload();
+  }
+
+  Future<void> _edit(CompareSession session) async {
+    final TextEditingController nameController =
+        TextEditingController(text: session.name);
+    final TextEditingController noteController =
+        TextEditingController(text: session.note);
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('编辑'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(labelText: '名称'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: '备注',
+                hintText: '型号 / 门店 / 价格，随便记',
+              ),
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+        ],
+      ),
+    );
+    final String name = nameController.text.trim();
+    final String note = noteController.text.trim();
+    nameController.dispose();
+    noteController.dispose();
+    if (ok != true || name.isEmpty) return;
+    await AppDb.instance
+        .updateSession(session.copyWith(name: name, note: note));
+    if (!mounted) return;
+    _reload();
+    showSnack(context, '已保存');
   }
 
   Future<void> _confirmDelete(CompareSession session) async {
@@ -173,7 +255,7 @@ class _HomePageState extends State<HomePage> {
           }
           final List<CompareSession> sessions = snapshot.data!;
           if (sessions.isEmpty) {
-            return const Center(
+            return Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
                 child: Column(
@@ -190,6 +272,12 @@ class _HomePageState extends State<HomePage> {
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 13, height: 1.6, color: AppColors.textSecondary),
                     ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: _create,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('新建第一个对比'),
+                    ),
                   ],
                 ),
               ),
@@ -203,6 +291,7 @@ class _HomePageState extends State<HomePage> {
               final CompareSession s = sessions[i];
               return Card(
                 child: InkWell(
+                  onLongPress: () => _edit(s),
                   onTap: () async {
                     await Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -241,14 +330,35 @@ class _HomePageState extends State<HomePage> {
                                 style: const TextStyle(
                                     fontSize: 12, color: AppColors.textSecondary),
                               ),
+                              if (s.note.isNotEmpty) ...<Widget>[
+                                const SizedBox(height: 2),
+                                Text(
+                                  s.note,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: AppColors.textHint),
+                                ),
+                              ],
                             ],
                           ),
                         ),
-                        IconButton(
-                          onPressed: () => _confirmDelete(s),
-                          icon: const Icon(Icons.delete_outline, size: 20),
-                          color: AppColors.danger,
-                          tooltip: '删除项目',
+                        PopupMenuButton<String>(
+                          tooltip: '更多',
+                          onSelected: (String value) {
+                            if (value == 'edit') {
+                              _edit(s);
+                            } else if (value == 'delete') {
+                              _confirmDelete(s);
+                            }
+                          },
+                          itemBuilder: (BuildContext ctx) =>
+                              const <PopupMenuEntry<String>>[
+                            PopupMenuItem<String>(
+                                value: 'edit', child: Text('重命名 / 备注')),
+                            PopupMenuItem<String>(
+                                value: 'delete', child: Text('删除项目')),
+                          ],
                         ),
                       ],
                     ),
