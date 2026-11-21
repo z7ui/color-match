@@ -175,6 +175,25 @@ img.Image transferWhite(img.Image source,
   return out;
 }
 
+/// 把某个颜色按「白点迁移」的同一套增益搬过去（用于「已知物自检」）。
+///
+/// 迁移图像和迁移单个颜色必须用完全相同的公式，否则误差下限就没意义。
+WhitePoint migrateColor(
+  WhitePoint color, {
+  required WhitePoint from,
+  required WhitePoint to,
+}) {
+  if (!from.isValid || !to.isValid) return color;
+  final double gr = _linearGain(to.r, from.r);
+  final double gg = _linearGain(to.g, from.g);
+  final double gb = _linearGain(to.b, from.b);
+  return WhitePoint(
+    _encodeSrgb(_srgbToLinear[color.r.round().clamp(0, 255)] * gr).toDouble(),
+    _encodeSrgb(_srgbToLinear[color.g.round().clamp(0, 255)] * gg).toDouble(),
+    _encodeSrgb(_srgbToLinear[color.b.round().clamp(0, 255)] * gb).toDouble(),
+  );
+}
+
 /// 解码 + 按 EXIF 摆正（手机竖拍时像素是横的，不摆正会「框到的白纸和采样到的位置」不一致）。
 img.Image? decodeOriented(Uint8List bytes) {
   final img.Image? decoded = img.decodeImage(bytes);

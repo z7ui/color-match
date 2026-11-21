@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 // 数据模型：一次对比 = 一个 session，里面至少两张 capture（参照 + 目标），
 // 外加一条 comparison（处理结果）。
 
@@ -38,6 +40,9 @@ class Capture {
     this.whiteG,
     this.whiteB,
     this.calibrationMethod = 'none',
+    this.checkR,
+    this.checkG,
+    this.checkB,
   });
 
   final String id;
@@ -53,6 +58,14 @@ class Capture {
   final int? whiteG;
   final int? whiteB;
   final String calibrationMethod; // none / white_patch / gray_card / color_checker
+
+  /// 可选：同一张图里另标的一块「已知物」（灰卡/白卡/同一件样品）的颜色。
+  /// 用来自检：两张图的已知物迁移后还差多少 = 这套流程的误差下限。
+  final int? checkR;
+  final int? checkG;
+  final int? checkB;
+
+  bool get hasChecker => checkR != null && checkG != null && checkB != null;
   final DateTime createdAt;
 
   bool get isReference => role == 'reference';
@@ -73,6 +86,7 @@ class Comparison {
     required this.createdAt,
     this.deltaEBefore = 0,
     this.note = '',
+    this.errorFloor = 0,
   });
 
   final String id;
@@ -89,6 +103,9 @@ class Comparison {
   /// 校正前 ΔE00（两张原始照片直接比）。
   final double deltaEBefore;
 
+  /// 误差下限（0 表示没标已知物，量不出来）。
+  final double errorFloor;
+
   final String note;
   final DateTime createdAt;
 
@@ -96,6 +113,15 @@ class Comparison {
   double get improvement {
     if (deltaEBefore <= 0.01) return 0;
     return ((deltaEBefore - deltaE) / deltaEBefore).clamp(0.0, 1.0);
+  }
+
+  bool get hasErrorFloor => errorFloor > 0;
+
+  /// 扣掉误差下限后的可信差异。
+  double get trustworthy {
+    if (errorFloor <= 0) return deltaE;
+    final double v = deltaE * deltaE - errorFloor * errorFloor;
+    return v <= 0 ? 0 : math.sqrt(v);
   }
 }
 

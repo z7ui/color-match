@@ -18,7 +18,7 @@ class AppDb {
 
   static final AppDb instance = AppDb._();
 
-  static const int schemaVersion = 2;
+  static const int schemaVersion = 3;
 
   Database? _db;
   Future<Database>? _opening;
@@ -39,7 +39,7 @@ class AppDb {
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: (Database db, int version) async {
-        await _createV2(db);
+        await _createV3(db);
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -53,13 +53,29 @@ class AppDb {
                 'ALTER TABLE comparisons ADD COLUMN delta_e_before REAL NOT NULL DEFAULT 0');
           }
         }
+        if (oldVersion < 3) {
+          // v2 -> v3：captures 增加「已知物」三通道；comparisons 增加误差下限
+          await _addColumnIfMissing(db, 'captures', 'check_r', 'INTEGER');
+          await _addColumnIfMissing(db, 'captures', 'check_g', 'INTEGER');
+          await _addColumnIfMissing(db, 'captures', 'check_b', 'INTEGER');
+          await _addColumnIfMissing(
+              db, 'comparisons', 'error_floor', 'REAL NOT NULL DEFAULT 0');
+        }
       },
     );
     _db = opened;
     return opened;
   }
 
-  Future<void> _createV2(Database db) async {
+  Future<void> _addColumnIfMissing(
+      Database db, String table, String column, String type) async {
+    final List<Map<String, Object?>> cols =
+        await db.rawQuery('PRAGMA table_info($table)');
+    if (cols.any((Map<String, Object?> c) => c['name'] == column)) return;
+    await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+  }
+
+  Future<void> _createV3(Database db) async {
     await db.execute('''
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY,
@@ -81,6 +97,9 @@ class AppDb {
         white_g INTEGER,
         white_b INTEGER,
         calibration_method TEXT NOT NULL DEFAULT 'none',
+        check_r INTEGER,
+        check_g INTEGER,
+        check_b INTEGER,
         created_at INTEGER NOT NULL
       )
     ''');
@@ -93,6 +112,7 @@ class AppDb {
         processed_path TEXT NOT NULL,
         delta_e REAL NOT NULL,
         delta_e_before REAL NOT NULL DEFAULT 0,
+        error_floor REAL NOT NULL DEFAULT 0,
         note TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL
       )
@@ -176,6 +196,9 @@ class AppDb {
       'white_g': capture.whiteG,
       'white_b': capture.whiteB,
       'calibration_method': capture.calibrationMethod,
+      'check_r': capture.checkR,
+      'check_g': capture.checkG,
+      'check_b': capture.checkB,
       'created_at': capture.createdAt.millisecondsSinceEpoch,
     });
   }
@@ -193,6 +216,9 @@ class AppDb {
     required int whiteR,
     required int whiteG,
     required int whiteB,
+    int? checkR,
+    int? checkG,
+    int? checkB,
     String method = 'white_patch',
   }) async {
     final Database d = await db;
@@ -203,8 +229,22 @@ class AppDb {
         'white_r': whiteR,
         'white_g': whiteG,
         'white_b': whiteB,
+        'check_r': checkR,
+        'check_g': checkG,
+        'check_b': checkB,
         'calibration_method': method,
       },
+      where: 'id = ?',
+      whereArgs: <Object>[captureId],
+    );
+  }
+
+  /// 记录「在哪拍的 / 什么光」——多光源复检靠它区分。
+  Future<void> updateCaptureLocation(String captureId, String location) async {
+    final Database d = await db;
+    await d.update(
+      'captures',
+      <String, Object?>{'location': location},
       where: 'id = ?',
       whereArgs: <Object>[captureId],
     );
@@ -254,6 +294,7 @@ class AppDb {
         'processed_path': comparison.processedPath,
         'delta_e': comparison.deltaE,
         'delta_e_before': comparison.deltaEBefore,
+        'error_floor': comparison.errorFloor,
         'note': comparison.note,
         'created_at': comparison.createdAt.millisecondsSinceEpoch,
       });
@@ -325,6 +366,9 @@ class AppDb {
       whiteG: (row['white_g'] as num?)?.toInt(),
       whiteB: (row['white_b'] as num?)?.toInt(),
       calibrationMethod: '${row['calibration_method'] ?? 'none'}',
+      checkR: (row['check_r'] as num?)?.toInt(),
+      checkG: (row['check_g'] as num?)?.toInt(),
+      checkB: (row['check_b'] as num?)?.toInt(),
       createdAt:
           DateTime.fromMillisecondsSinceEpoch((row['created_at'] as num).toInt()),
     );
@@ -339,6 +383,7 @@ class AppDb {
       processedPath: '${row['processed_path']}',
       deltaE: (row['delta_e'] as num).toDouble(),
       deltaEBefore: ((row['delta_e_before'] as num?) ?? 0).toDouble(),
+      errorFloor: ((row['error_floor'] as num?) ?? 0).toDouble(),
       note: '${row['note'] ?? ''}',
       createdAt:
           DateTime.fromMillisecondsSinceEpoch((row['created_at'] as num).toInt()),

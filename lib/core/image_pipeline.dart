@@ -44,6 +44,19 @@ Map<String, Object?> _compare(Map<String, Object?> arg) {
   final double tr = (arg['targetR']! as num).toDouble();
   final double tg = (arg['targetG']! as num).toDouble();
   final double tb = (arg['targetB']! as num).toDouble();
+  // 已知物（可选）：同一次拍摄里的另一件已知颜色，用来自检
+  final num? rcr = arg['refCheckR'] as num?;
+  final num? rcg = arg['refCheckG'] as num?;
+  final num? rcb = arg['refCheckB'] as num?;
+  final num? tcr = arg['targetCheckR'] as num?;
+  final num? tcg = arg['targetCheckG'] as num?;
+  final num? tcb = arg['targetCheckB'] as num?;
+  final WhitePoint? refChecker = (rcr != null && rcg != null && rcb != null)
+      ? WhitePoint(rcr.toDouble(), rcg.toDouble(), rcb.toDouble())
+      : null;
+  final WhitePoint? targetChecker = (tcr != null && tcg != null && tcb != null)
+      ? WhitePoint(tcr.toDouble(), tcg.toDouble(), tcb.toDouble())
+      : null;
 
   final img.Image? refRaw =
       decodeOriented(File(refRawPath).readAsBytesSync());
@@ -58,6 +71,8 @@ Map<String, Object?> _compare(Map<String, Object?> arg) {
     targetRaw: downscale(target),
     referenceWhite: WhitePoint(rr, rg, rb),
     targetWhite: WhitePoint(tr, tg, tb),
+    referenceChecker: refChecker,
+    targetChecker: targetChecker,
   );
 
   return <String, Object?>{
@@ -65,6 +80,8 @@ Map<String, Object?> _compare(Map<String, Object?> arg) {
     'deltaE': result.deltaEAfter,
     'deltaEBefore': result.deltaEBefore,
     'improvement': result.improvement,
+    'errorFloor': result.errorFloor ?? 0.0,
+    'trustworthy': result.trustworthy,
   };
 }
 
@@ -110,12 +127,22 @@ class CompareOutcome {
     required this.deltaE,
     required this.deltaEBefore,
     required this.improvement,
+    this.errorFloor = 0,
+    required this.trustworthy,
   });
 
   final Uint8List jpeg;
   final double deltaE;
   final double deltaEBefore;
   final double improvement;
+
+  /// 误差下限（0 表示这一组没标已知物）
+  final double errorFloor;
+
+  /// 扣掉误差下限后的可信差异
+  final double trustworthy;
+
+  bool get hasFloor => errorFloor > 0;
 }
 
 Future<CompareOutcome> compareFiles({
@@ -127,6 +154,12 @@ Future<CompareOutcome> compareFiles({
   required int targetR,
   required int targetG,
   required int targetB,
+  int? refCheckR,
+  int? refCheckG,
+  int? refCheckB,
+  int? targetCheckR,
+  int? targetCheckG,
+  int? targetCheckB,
 }) async {
   final Map<String, Object?> out = await compute(_compare, <String, Object?>{
     'refRaw': referenceRawPath,
@@ -137,12 +170,20 @@ Future<CompareOutcome> compareFiles({
     'targetR': targetR,
     'targetG': targetG,
     'targetB': targetB,
+    'refCheckR': refCheckR,
+    'refCheckG': refCheckG,
+    'refCheckB': refCheckB,
+    'targetCheckR': targetCheckR,
+    'targetCheckG': targetCheckG,
+    'targetCheckB': targetCheckB,
   });
   return CompareOutcome(
     jpeg: out['jpeg']! as Uint8List,
     deltaE: (out['deltaE']! as num).toDouble(),
     deltaEBefore: (out['deltaEBefore']! as num).toDouble(),
     improvement: (out['improvement']! as num).toDouble(),
+    errorFloor: (out['errorFloor']! as num).toDouble(),
+    trustworthy: (out['trustworthy']! as num).toDouble(),
   );
 }
 

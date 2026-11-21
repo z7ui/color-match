@@ -99,6 +99,83 @@ class _SessionPageState extends State<SessionPage> {
       createdAt: DateTime.now(),
     ));
     await _load();
+    if (!mounted) return;
+    await _askLocation(id);
+  }
+
+  /// 给这张图打个「光」的标签：同一块样品换几个光源拍，才能看出是不是同色异谱。
+  Future<void> _askLocation(String captureId) async {
+    final List<String> presets = <String>[
+      '家里·顶灯',
+      '家里·窗边自然光',
+      '门店·射灯',
+      '门店·顶灯',
+      '室外',
+    ];
+    final String? picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (BuildContext ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('这张是在哪拍的？什么光？（可跳过）',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            ...presets.map((String p) => ListTile(
+                  dense: true,
+                  title: Text(p, style: const TextStyle(fontSize: 14)),
+                  onTap: () => Navigator.pop(ctx, p),
+                )),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.edit_outlined, size: 18),
+              title: const Text('自定义…', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, '__custom__'),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.close, size: 18),
+              title: const Text('跳过', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || picked == null) return;
+    String label = picked;
+    if (picked == '__custom__') {
+      final TextEditingController controller = TextEditingController();
+      final String? custom = await showDialog<String>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          title: const Text('光源 / 地点'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: '比如：门店东侧射灯'),
+          ),
+          actions: <Widget>[
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      controller.dispose();
+      if (custom == null || custom.isEmpty) return;
+      label = custom;
+    }
+    await AppDb.instance.updateCaptureLocation(captureId, label);
+    await _load();
   }
 
   /// 换参照图：替换而不是再插一张。
@@ -182,12 +259,15 @@ class _SessionPageState extends State<SessionPage> {
 
   Future<void> _calibrate(Capture capture) async {
     if (_busy) return;
-    final WhitePoint? white = await Navigator.of(context).push<WhitePoint>(
-      MaterialPageRoute<WhitePoint>(
+    final Calibration? calibration =
+        await Navigator.of(context).push<Calibration>(
+      MaterialPageRoute<Calibration>(
         builder: (_) => CalibratePage(imagePath: capture.imagePath),
       ),
     );
-    if (white == null || !mounted) return;
+    if (calibration == null || !mounted) return;
+    final WhitePoint white = calibration.white;
+    final WhitePoint? checker = calibration.checker;
     if (!white.isValid) {
       showSnack(context, '这块白太暗了，换个更亮的白纸', error: true);
       return;
@@ -206,6 +286,9 @@ class _SessionPageState extends State<SessionPage> {
         whiteR: white.r.round(),
         whiteG: white.g.round(),
         whiteB: white.b.round(),
+        checkR: checker?.r.round(),
+        checkG: checker?.g.round(),
+        checkB: checker?.b.round(),
       );
       // 顺手清掉旧版本留下的校正图，别让界面再读到它
       final String stale = p.join(
@@ -250,6 +333,12 @@ class _SessionPageState extends State<SessionPage> {
       targetR: target.whiteR!,
       targetG: target.whiteG!,
       targetB: target.whiteB!,
+      refCheckR: reference.checkR,
+      refCheckG: reference.checkG,
+      refCheckB: reference.checkB,
+      targetCheckR: target.checkR,
+      targetCheckG: target.checkG,
+      targetCheckB: target.checkB,
     );
 
     final Directory dir = await getApplicationDocumentsDirectory();
@@ -265,6 +354,7 @@ class _SessionPageState extends State<SessionPage> {
       processedPath: processedPath,
       deltaE: double.parse(outcome.deltaE.toStringAsFixed(2)),
       deltaEBefore: double.parse(outcome.deltaEBefore.toStringAsFixed(2)),
+      errorFloor: double.parse(outcome.errorFloor.toStringAsFixed(2)),
       createdAt: DateTime.now(),
     ));
   }
@@ -669,8 +759,10 @@ class _SessionPageState extends State<SessionPage> {
                       ? '白点 (' +
                           capture.whiteR.toString() + ', ' +
                           capture.whiteG.toString() + ', ' +
-                          capture.whiteB.toString() + ')'
-                      : '未标定',
+                          capture.whiteB.toString() + ')' +
+                          (capture.hasChecker ? '　·　已标已知物' : '') +
+                          (capture.location.isEmpty ? '' : '　·　' + capture.location)
+                      : (capture.location.isEmpty ? '未标定' : '未标定　·　' + capture.location),
                   style: TextStyle(
                       fontSize: 11,
                       color: capture.isCalibrated
@@ -929,6 +1021,10 @@ class _SessionPageState extends State<SessionPage> {
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
                         color: AppColors.success)),
+                if (comparison.hasErrorFloor)
+                  Text('可信 ' + comparison.trustworthy.toStringAsFixed(2),
+                      style: TextStyle(
+                          fontSize: 11, color: AppColors.sub(context))),
                 Text('校正前 ' + comparison.deltaEBefore.toString(),
                     style: TextStyle(
                         fontSize: 11, color: AppColors.sub(context))),
@@ -940,6 +1036,24 @@ class _SessionPageState extends State<SessionPage> {
         Text(hint,
             style: const TextStyle(
                 fontSize: 11, color: AppColors.textSecondary)),
+        if (comparison.hasErrorFloor)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              comparison.errorFloor > 5
+                  ? '误差下限 ΔE ' +
+                      comparison.errorFloor.toStringAsFixed(1) +
+                      '（偏大：两块已知物对不上，本次对比不可信，建议重拍）'
+                  : '误差下限 ΔE ' +
+                      comparison.errorFloor.toStringAsFixed(1) +
+                      '　·　本次 ΔE 里约有这么多是噪声',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: comparison.errorFloor > 5
+                      ? AppColors.danger
+                      : AppColors.sub(context)),
+            ),
+          ),
         const SizedBox(height: AppSpacing.sm),
         Row(
           children: <Widget>[

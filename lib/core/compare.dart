@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:image/image.dart' as img;
 
 import 'calibration.dart';
@@ -15,6 +17,7 @@ class CompareResult {
     required this.referenceColor,
     required this.targetColorBefore,
     required this.targetColorAfter,
+    this.errorFloor,
   });
 
   /// 目标图拉到参照白点后的成品（「这块砖搬到我家灯下大概这样」）。
@@ -29,6 +32,22 @@ class CompareResult {
   final WhitePoint referenceColor;
   final WhitePoint targetColorBefore;
   final WhitePoint targetColorAfter;
+
+  /// 误差下限：两张图里「同一块已知物」迁移后仍然差多少。
+  ///
+  /// 这是白纸（已强制对齐）给不了的信息——白点必然对齐，但相机非线性、截断、
+  /// 光源光谱差异会留下残差。null 表示这一组没有标已知物，量不出来。
+  final double? errorFloor;
+
+  /// 扣掉误差下限之后的可信差异：sqrt(max(0, ΔE² - floor²))。
+  ///
+  /// ΔE 小于误差下限时返回 0 —— 说明「这次对比分辨不出来」，不是「完全一样」。
+  double get trustworthy {
+    final double? floor = errorFloor;
+    if (floor == null) return deltaEAfter;
+    final double sq = deltaEAfter * deltaEAfter - floor * floor;
+    return sq <= 0 ? 0 : math.sqrt(sq);
+  }
 
   /// 改善比例，夹在 0..1。校正后反而更差时给 0，而不是负数。
   double get improvement {
@@ -57,6 +76,8 @@ CompareResult compareToReference({
   required img.Image targetRaw,
   required WhitePoint referenceWhite,
   required WhitePoint targetWhite,
+  WhitePoint? referenceChecker,
+  WhitePoint? targetChecker,
 }) {
   // 只动目标：把工地的白点搬到家里的白点上，主人的房子保持原样
   final img.Image processed = transferWhite(
@@ -76,7 +97,32 @@ CompareResult compareToReference({
     referenceColor: refColor,
     targetColorBefore: before,
     targetColorAfter: after,
+    errorFloor: errorFloor(
+      referenceChecker: referenceChecker,
+      targetChecker: targetChecker,
+      referenceWhite: referenceWhite,
+      targetWhite: targetWhite,
+    ),
   );
+}
+
+/// 误差下限：把目标侧的已知物按同一套增益搬过来，再和参照侧的已知物比。
+///
+/// 同一样东西、同样光线下应该几乎一样；差多少，就是这套流程的分辨力下限。
+/// 任一侧没标已知物 → null。
+double? errorFloor({
+  required WhitePoint? referenceChecker,
+  required WhitePoint? targetChecker,
+  required WhitePoint referenceWhite,
+  required WhitePoint targetWhite,
+}) {
+  if (referenceChecker == null || targetChecker == null) return null;
+  final WhitePoint migrated = migrateColor(
+    targetChecker,
+    from: targetWhite,
+    to: referenceWhite,
+  );
+  return _deltaE(referenceChecker, migrated);
 }
 
 double _deltaE(WhitePoint a, WhitePoint b) => deltaE00(

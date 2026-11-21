@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:color_match/core/calibration.dart';
 import 'package:color_match/core/compare.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -128,4 +130,56 @@ void main() {
       expect(centerColor(image).r, closeTo(200, 1));
     });
   });
+
+  group('已知物自检（误差下限）', () {
+    test('没标已知物时，误差下限为 null', () {
+      final img.Image reference = solid(120);
+      final img.Image target = solid(180);
+      final CompareResult result = compareToReference(
+        reference: reference,
+        targetRaw: target,
+        referenceWhite: const WhitePoint(120, 120, 120),
+        targetWhite: const WhitePoint(180, 180, 180),
+      );
+      expect(result.errorFloor, isNull);
+      expect(result.trustworthy, result.deltaEAfter);
+    });
+
+    test('同一块已知物、同样中性：误差下限接近 0', () {
+      final img.Image reference = solid(120);
+      final img.Image target = solid(180);
+      final CompareResult result = compareToReference(
+        reference: reference,
+        targetRaw: target,
+        referenceWhite: const WhitePoint(120, 120, 120),
+        targetWhite: const WhitePoint(180, 180, 180),
+        referenceChecker: const WhitePoint(100, 100, 100),
+        targetChecker: const WhitePoint(150, 150, 150),
+      );
+      // 150 按同一增益搬回参照侧应该落在 100 附近
+      expect(result.errorFloor, isNotNull);
+      expect(result.errorFloor!, lessThan(1.5));
+    });
+
+    test('已知物对不上时，误差下限变大、可信差异归零', () {
+      final img.Image reference = solid(120);
+      final img.Image target = solid(180);
+      final CompareResult result = compareToReference(
+        reference: reference,
+        targetRaw: target,
+        referenceWhite: const WhitePoint(120, 120, 120),
+        targetWhite: const WhitePoint(180, 180, 180),
+        // 参照侧记的是中灰，目标侧那块却明显偏黄（相机/光没对上）
+        referenceChecker: const WhitePoint(100, 100, 100),
+        targetChecker: const WhitePoint(150, 120, 60),
+      );
+      expect(result.errorFloor!, greaterThan(10));
+      final double floor = result.errorFloor!;
+      final double sq =
+          result.deltaEAfter * result.deltaEAfter - floor * floor;
+      final double expected = sq <= 0 ? 0 : math.sqrt(sq);
+      expect(result.trustworthy, closeTo(expected, 0.001));
+    });
+  });
 }
+
