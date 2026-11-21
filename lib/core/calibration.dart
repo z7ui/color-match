@@ -53,6 +53,11 @@ final Float64List _linearToSrgb = () {
   return table;
 }();
 
+/// 公开给 CCM 用的线性/编码互转（和内部查表同一套数值）。
+double srgbToLinear(int v) => _srgbToLinear[v.clamp(0, 255)];
+
+int linearToSrgb(double linear) => _encodeSrgb(linear);
+
 int _encodeSrgb(double linear) {
   if (linear <= 0) return 0;
   if (linear >= 1) return 255;

@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/calibration.dart';
+import '../../core/ccm.dart';
 import '../../core/db.dart';
 import '../../core/image_pipeline.dart';
 import '../../core/models.dart';
@@ -341,7 +342,10 @@ class _SessionPageState extends State<SessionPage> {
   // ------------------------------------------------------------ 对比
 
   /// 一批目标一次算完：参照图只解码一遍，结果一起回传。
+  ///
+  /// 如果用户做过 24 色卡校正，这里会带上 CCM（先校相机色彩，再拉白点）。
   Future<int> _runBatch(Capture reference, List<Capture> targets) async {
+    final CameraCcm? ccm = await CameraProfile.load();
     final List<CompareTask> tasks = <CompareTask>[
       for (final Capture t in targets)
         CompareTask(
@@ -363,6 +367,9 @@ class _SessionPageState extends State<SessionPage> {
       referenceCheckR: reference.checkR,
       referenceCheckG: reference.checkG,
       referenceCheckB: reference.checkB,
+      ccm: ccm == null
+          ? null
+          : <double>[...ccm.matrix, ...ccm.offset],
       tasks: tasks,
     );
 

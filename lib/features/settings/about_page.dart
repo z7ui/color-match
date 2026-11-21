@@ -5,9 +5,11 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/app_theme.dart';
 import '../../core/config.dart';
 import '../../core/net.dart';
+import '../capture/color_card_page.dart';
 import 'backup_page.dart';
 import 'diag_page.dart';
 import 'permissions_page.dart';
+import 'screen_calibration_page.dart';
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -190,6 +192,28 @@ class _AboutPageState extends State<AboutPage> {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                         builder: (_) => const BackupPage()),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('相机色彩校正（24 色卡）'),
+                  subtitle: const Text('可选：强色偏光源下更准，需要一张色卡'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => const ColorCardPage()),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.smartphone_outlined),
+                  title: const Text('屏幕校色'),
+                  subtitle: const Text('人眼自检：暗部 / 高光 / 白点 / 三原色'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => const ScreenCalibrationPage()),
                   ),
                 ),
               ],

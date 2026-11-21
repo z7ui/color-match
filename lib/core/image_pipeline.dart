@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:image/image.dart' as img;
 
 import 'calibration.dart';
+import 'ccm.dart';
 import 'compare.dart';
 
 /// 图像重活全都在后台 isolate 里做。
@@ -37,6 +38,15 @@ int? _intOrNull(Map<Object?, Object?> map, String key) {
   return v == null ? null : (v as num).toInt();
 }
 
+/// 可选相机色彩校正（CCM）：作用在两张图的线性光空间，先校色再拉白点。
+CameraCcm? _ccmOf(Object? raw) {
+  if (raw is! List || raw.length != 12) return null;
+  final List<double> values =
+      raw.map((Object? v) => (v! as num).toDouble()).toList();
+  return CameraCcm(
+      matrix: values.sublist(0, 9), offset: values.sublist(9, 12));
+}
+
 /// 批量对比：**参照图只解码一次**，然后依次处理每个目标。
 ///
 /// 以前每个目标各调一次 compute，3 个目标就把参照图解码 3 遍；
@@ -50,12 +60,14 @@ List<Object?> _compareMany(Map<String, Object?> arg) {
   final int? rcg = arg['refCheckG'] as int?;
   final int? rcb = arg['refCheckB'] as int?;
   final List<Object?> targets = arg['targets']! as List<Object?>;
+  final CameraCcm? ccm = _ccmOf(arg['ccm']);
 
   final img.Image? refRaw = decodeOriented(File(refPath).readAsBytesSync());
   if (refRaw == null) {
     throw const FormatException('参照图无法解码');
   }
-  final img.Image ref = downscale(refRaw);
+  img.Image ref = downscale(refRaw);
+  if (ccm != null) ref = applyCcm(ref, ccm);
   final WhitePoint referenceWhite = WhitePoint(rr, rg, rb);
   final WhitePoint? referenceChecker =
       (rcr != null && rcg != null && rcb != null)
@@ -70,6 +82,9 @@ List<Object?> _compareMany(Map<String, Object?> arg) {
       final img.Image? target = decodeOriented(File(path).readAsBytesSync());
       if (target == null) throw const FormatException('目标图无法解码');
 
+      img.Image scaled = downscale(target);
+      if (ccm != null) scaled = applyCcm(scaled, ccm);
+
       final int? tcr = _intOrNull(t, 'checkR');
       final int? tcg = _intOrNull(t, 'checkG');
       final int? tcb = _intOrNull(t, 'checkB');
@@ -80,7 +95,7 @@ List<Object?> _compareMany(Map<String, Object?> arg) {
 
       final CompareResult result = compareToReference(
         reference: ref,
-        targetRaw: downscale(target),
+        targetRaw: scaled,
         referenceWhite: referenceWhite,
         targetWhite: WhitePoint(_num(t, 'r'), _num(t, 'g'), _num(t, 'b')),
         referenceChecker: referenceChecker,
@@ -184,6 +199,7 @@ Future<List<CompareOutcome>> compareMany({
   int? referenceCheckG,
   int? referenceCheckB,
   required List<CompareTask> tasks,
+  List<double>? ccm,
 }) async {
   if (tasks.isEmpty) return <CompareOutcome>[];
   final List<Object?> raw = await compute(_compareMany, <String, Object?>{
@@ -195,6 +211,7 @@ Future<List<CompareOutcome>> compareMany({
     'refCheckG': referenceCheckG,
     'refCheckB': referenceCheckB,
     'targets': tasks.map((CompareTask t) => t.toMap()).toList(),
+    'ccm': ccm,
   });
   return raw.map((Object? item) {
     final Map<Object?, Object?> m = item! as Map<Object?, Object?>;
