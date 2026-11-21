@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/db.dart';
+import '../../core/diag.dart';
 import '../../core/exporter.dart';
 import '../../core/storage.dart';
 
@@ -23,11 +24,33 @@ class _BackupPageState extends State<BackupPage> {
   bool _busy = false;
   String? _status;
   List<File> _backups = <File>[];
+  Map<String, int> _usage = <String, int>{};
 
   @override
   void initState() {
     super.initState();
     _scan();
+    _loadUsage();
+  }
+
+  Future<void> _loadUsage() async {
+    final Map<String, int> usage = await Diag.usage();
+    if (!mounted) return;
+    setState(() => _usage = usage);
+  }
+
+  Future<void> _clean() async {
+    setState(() {
+      _busy = true;
+      _status = '清理中…';
+    });
+    final String result = await Diag.cleanTemporary();
+    await _loadUsage();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _status = result;
+    });
   }
 
   Future<Directory> _backupDir() async {
@@ -151,6 +174,46 @@ class _BackupPageState extends State<BackupPage> {
         padding: const EdgeInsets.all(AppSpacing.lg),
         children: <Widget>[
           Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      const Text('占用',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: _busy ? null : _clean,
+                        style: TextButton.styleFrom(
+                          minimumSize: const Size(0, 30),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                        ),
+                        child: const Text('清理临时文件',
+                            style: TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  _usageRow('数据库', _usage['db'] ?? 0),
+                  _usageRow('照片（captures）', _usage['captures'] ?? 0),
+                  _usageRow('导出 / 备份（exports）', _usage['exports'] ?? 0),
+                  _usageRow('缓存（cache）', _usage['cache'] ?? 0),
+                  const SizedBox(height: 4),
+                  Text(
+                    '「清理临时文件」只删缓存目录、数据库里没人引用的孤儿图，以及旧版本留下的记录文件；'
+                    '照片、导出图、备份都不会动。',
+                    style: TextStyle(
+                        fontSize: 11, height: 1.5, color: AppColors.sub(context)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Card(
             child: Column(
               children: <Widget>[
                 ListTile(
@@ -210,6 +273,23 @@ class _BackupPageState extends State<BackupPage> {
           Text('照片本身不会被打包：备份只含数据库记录，照片仍在应用目录里。',
               style: TextStyle(
                   fontSize: 12, height: 1.6, color: AppColors.sub(context))),
+        ],
+      ),
+    );
+  }
+
+  Widget _usageRow(String label, int bytes) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(label,
+                style: TextStyle(fontSize: 12, color: AppColors.sub(context))),
+          ),
+          Text(Diag.readSize(bytes),
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600)),
         ],
       ),
     );

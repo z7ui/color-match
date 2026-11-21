@@ -97,14 +97,16 @@ class _SessionPageState extends State<SessionPage> {
         p.join(dir.path, 'captures', widget.sessionId, id + '_' + role + ext);
     await File(dest).create(recursive: true);
     await File(sourcePath).copy(dest);
-    if (source == 'camera') {
-      try {
-        final File tmp = File(sourcePath);
-        if (await tmp.exists() && !tmp.path.startsWith(dir.path)) {
-          await tmp.delete();
-        }
-      } catch (_) {}
-    }
+
+    // 相机和「相册选图」都会在我们自己的缓存目录里留一份副本，
+    // 复制到正式目录后就把它删掉——以前只删相机那份，相册选的每张都攒着。
+    try {
+      final String cachePath = (await getTemporaryDirectory()).path;
+      final File tmp = File(sourcePath);
+      if (p.isWithin(cachePath, tmp.path) && await tmp.exists()) {
+        await tmp.delete();
+      }
+    } catch (_) {}
 
     await AppDb.instance.insertCapture(Capture(
       id: id,

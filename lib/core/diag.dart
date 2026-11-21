@@ -116,6 +116,18 @@ class Diag {
   static Future<String> _cleanCache() async {
     int removed = 0;
     int bytes = 0;
+
+    // 0.1.16 及以前写过的屏幕记录，现在没人读，顺手清掉
+    try {
+      final Directory docs = await getApplicationDocumentsDirectory();
+      final File screenProfile =
+          File(p.join(docs.path, 'screen_profile.json'));
+      if (await screenProfile.exists()) {
+        bytes += await screenProfile.length();
+        await screenProfile.delete();
+        removed++;
+      }
+    } catch (_) {}
     try {
       final Directory tmp = await getTemporaryDirectory();
       if (await tmp.exists()) {
@@ -191,6 +203,43 @@ class Diag {
       return '执行失败：' + error.toString();
     }
   }
+
+  /// 占用统计（数据管理页显示用）：数据库 / 照片 / 导出 / 缓存。
+  static Future<Map<String, int>> usage() async {
+    final Directory docs = await getApplicationDocumentsDirectory();
+    final Directory tmp = await getTemporaryDirectory();
+    int db = 0;
+    try {
+      final File file = File(await AppDb.instance.databasePath());
+      if (await file.exists()) db = await file.length();
+    } catch (_) {}
+    return <String, int>{
+      'db': db,
+      'captures': await _dirSize(Directory(p.join(docs.path, 'captures'))),
+      'exports': await _dirSize(Directory(p.join(docs.path, 'exports'))),
+      'cache': await _dirSize(tmp),
+    };
+  }
+
+  static Future<int> _dirSize(Directory dir) async {
+    if (!await dir.exists()) return 0;
+    int total = 0;
+    try {
+      await for (final FileSystemEntity entity in dir.list(recursive: true)) {
+        if (entity is File) {
+          try {
+            total += await entity.length();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    return total;
+  }
+
+  /// 直接在 UI 里调用的清理入口。
+  static Future<String> cleanTemporary() => _cleanCache();
+
+  static String readSize(int bytes) => _size(bytes);
 
   static String _size(int bytes) {
     if (bytes < 1024) return bytes.toString() + ' B';
