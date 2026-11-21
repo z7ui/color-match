@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:gal/gal.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -30,4 +31,20 @@ String prettyPath(String fullPath) {
       .replaceFirst(RegExp(r'^/storage/emulated/0/'), '内部存储/')
       .replaceFirst(RegExp(r'^/data/user/0/[^/]+/'), '')
       .replaceFirst(RegExp(r'^/data/data/[^/]+/'), '');
+}
+
+/// 存到相册（Pictures/ColorMatch），卸载 App 不会删。
+/// 返回 true 表示已进相册。
+Future<bool> saveToGallery(String filePath) async {
+  try {
+    final bool has = await Gal.hasPermission(toAlbum: true);
+    if (!has) {
+      final bool granted = await Gal.requestPermission(toAlbum: true);
+      if (!granted) return false;
+    }
+    await Gal.putImage(filePath, album: 'ColorMatch');
+    return true;
+  } catch (_) {
+    return false;
+  }
 }

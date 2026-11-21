@@ -124,10 +124,12 @@ class _PermissionsPageState extends State<PermissionsPage> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '导出的对比图存在应用自己的目录里：\n'
-                          'Android/data/com.z7ui.color_match/files/ColorMatch/\n'
-                          '这个目录不需要额外权限，卸载 App 时会被一起删掉。'
-                          '要长期保存，用「保存对比图」时点「分享」存到相册或网盘。',
+                          '导出时会存两份：\n\n'
+                          '1. 相册「ColorMatch」相簿（长期，卸载不丢）\n'
+                          '   Android 10+ 不需要权限；Android 9 及以下需要上表的「存储」权限。\n\n'
+                          '2. 应用目录（临时，卸载即删）\n'
+                          '   Android/data/com.z7ui.color_match/files/ColorMatch/\n\n'
+                          '相册那份用来长期留底，应用目录那份用于 App 内快速查看。',
                           style: TextStyle(
                               fontSize: 12,
                               height: 1.7,

@@ -333,23 +333,44 @@ class _SessionPageState extends State<SessionPage> {
       final File file = File(p.join(dir.path, fileName));
       await file.writeAsBytes(img.encodeJpg(report, quality: 92));
 
+      // 双写：再存一份到相册（卸载不丢）
+      final bool inGallery = await saveToGallery(file.path);
+
       if (!mounted) return;
       await showDialog<void>(
         context: context,
         builder: (BuildContext ctx) => AlertDialog(
-          title: const Text('已保存到本地'),
+          title: const Text('已保存'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              const Text('文件:', style: TextStyle(fontSize: 12)),
+              Row(
+                children: <Widget>[
+                  Icon(
+                    inGallery ? Icons.check_circle : Icons.error_outline,
+                    size: 18,
+                    color: inGallery ? AppColors.success : AppColors.warning,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      inGallery
+                          ? '已存到相册「ColorMatch」相簿（卸载不丢）'
+                          : '相册没存成（权限被拒或空间不够）',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Text('应用目录（临时，卸载会删）:',
+                  style: TextStyle(fontSize: 12)),
               const SizedBox(height: 4),
               SelectableText(fileName,
                   style: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 12),
-              const Text('目录:', style: TextStyle(fontSize: 12)),
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
               SelectableText(prettyPath(dir.path),
                   style: const TextStyle(
                       fontSize: 12, color: AppColors.textSecondary)),
