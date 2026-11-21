@@ -1,0 +1,15 @@
+# 统一换行符：仓库里一律用 LF，避免 Windows 编辑器把整份文件改成 CRLF
+# 导致「改一行、diff 两千行」的假改动（0.1.11 就发生过一次）。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.apk binary
+*.jar binary
+*.jks binary
+*.keystore binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ttf binary
+*.otf binary
