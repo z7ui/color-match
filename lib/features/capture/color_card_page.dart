@@ -223,15 +223,42 @@ class _ColorCardPageState extends State<ColorCardPage> {
         borderRadius: BorderRadius.circular(AppRadius.card),
         border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
       ),
-      child: const Column(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text('这是什么',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-          SizedBox(height: 6),
-          Text(
+          // 没色卡的人第一眼就该知道「可以不弄」
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text('没有色卡？这一页可以先跳过',
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 30),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                child: const Text('返回', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+          const Text(
+            '不做这一步也完全能用：对比只做白点校正，和以前的逻辑一样。',
+            style: TextStyle(fontSize: 12, height: 1.5, color: AppColors.textSecondary),
+          ),
+          const Divider(height: 20),
+          const Text('这是什么 / 什么时候值得做',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          const Text(
             '白纸只能对齐「白」，对不齐「红有多红」。24 色卡能算出这台手机的色彩矩阵，'
             '把强色偏光源下的偏色压掉一半左右。\n\n'
+            '建议做的情况：门店用射灯、家里灯偏黄、几组对比的 ΔE 总在临界值附近反复横跳。\n'
+            '不建议做的情况：只有白纸、拍得也一般——这一步对拍摄质量很敏感，色卡拍歪了反而更差。\n\n'
             '拍法：色卡放平、正对、占满画面、光照均匀（别让射灯直射出反光），'
             '四个角要能看见。拍完点四个内角。\n\n'
             '开启后：ΔE 是两张都做过相机校色后算的；对比图右侧经过校色，左侧仍是家里原图。',

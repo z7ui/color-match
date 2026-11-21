@@ -200,7 +200,7 @@ class _AboutPageState extends State<AboutPage> {
                 ListTile(
                   leading: const Icon(Icons.palette_outlined),
                   title: const Text('相机色彩校正（24 色卡）'),
-                  subtitle: const Text('可选：强色偏光源下更准，需要一张色卡'),
+                  subtitle: const Text('可选：需要 24 色卡，没有可以跳过，不影响使用'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
