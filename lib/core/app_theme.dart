@@ -119,8 +119,12 @@ ThemeData buildTheme(Brightness brightness) {
   );
 }
 
-AppBar buildAppBar(BuildContext context, String title, {List<Widget>? actions}) {
-  return AppBar(title: Text(title), actions: actions);
+/// 统一的 AppBar：标题 + 右侧动作。
+///
+/// 之前这个函数白拿一个 context 却从不使用（空壳抽象），调用点看起来「统一」而已。
+/// 需要 context 时才传，不需要就不传。
+AppBar buildAppBar(String title, {List<Widget>? actions, Widget? leading}) {
+  return AppBar(title: Text(title), actions: actions, leading: leading);
 }
 
 /// 统一的轻提示。

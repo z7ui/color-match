@@ -33,7 +33,8 @@ class _AboutPageState extends State<AboutPage> {
       return;
     }
 
-    final int remote = (json['versionCode'] as num?)?.toInt() ?? 0;
+    // 服务器清单里字段叫 versionCode 或 buildNumber 都要认（余砖管家那边用的是后者）
+    final int remote = ((json['versionCode'] ?? json['buildNumber']) as num?)?.toInt() ?? 0;
     final String version = '${json['version'] ?? ''}';
     final String notes = '${json['notes'] ?? ''}';
     final String? apkUrl = json['apk_url'] as String?;
@@ -81,13 +82,23 @@ class _AboutPageState extends State<AboutPage> {
   }
 
   Future<void> _open(String url) async {
-    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    try {
+      final Uri uri = Uri.parse(url);
+      final bool can = await canLaunchUrl(uri);
+      if (!can) {
+        if (mounted) showSnack(context, '打不开这个链接：' + url, error: true);
+        return;
+      }
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (error) {
+      if (mounted) showSnack(context, '打开链接失败：' + error.toString(), error: true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: buildAppBar(context, '关于'),
+      appBar: buildAppBar('关于'),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg),
         children: <Widget>[

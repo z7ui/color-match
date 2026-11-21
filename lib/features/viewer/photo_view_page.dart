@@ -69,7 +69,7 @@ class _PhotoViewPageState extends State<PhotoViewPage> {
               child: Image.file(
                 File(widget.items[i]),
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Text('图片读取失败',
+                errorBuilder: (_, _, _) => const Text('图片读取失败',
                     style: TextStyle(color: Colors.white54)),
               ),
             ),

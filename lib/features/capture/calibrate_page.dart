@@ -1,14 +1,22 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
 import '../../core/app_theme.dart';
 import '../../core/calibration.dart';
+import '../../core/image_pipeline.dart';
 
 /// 标定页：在照片上框选一块「应该是白色」的区域（白纸 / 灰卡）。
 ///
-/// 交互：拖动移动选框，双指缩放调整大小；底部实时显示平均 RGB。
+/// 交互：单指拖动移动选框，双指缩放调整大小；底部实时显示平均 RGB。
+///
+/// 两个实现要点：
+/// * **不能同时用 onPanUpdate 和 onScaleUpdate** —— Flutter 会直接抛
+///   「Having both a pan gesture recognizer and a scale gesture recognizer」，
+///   debug 下必崩、release 下双指缩放失效。所以只用 scale，按 pointerCount 分流。
+/// * 拖动过程中用降采样（stride=4）采样，松手后再精算，避免每帧扫一遍全像素。
 class CalibratePage extends StatefulWidget {
   const CalibratePage({super.key, required this.imagePath});
 
@@ -19,11 +27,16 @@ class CalibratePage extends StatefulWidget {
 }
 
 class _CalibratePageState extends State<CalibratePage> {
-  img.Image? _image;
-  Rect _selection = const Rect.fromLTWH(0.35, 0.35, 0.3, 0.3);
+  img.Image? _preview;
+  Uint8List? _previewBytes;
   WhitePoint? _white;
   double? _spread;
   String? _error;
+
+  Rect _selection = const Rect.fromLTWH(0.35, 0.35, 0.3, 0.3);
+  double _startWidth = 0.3;
+  bool _dragging = false;
+  Size _viewSize = Size.zero;
 
   @override
   void initState() {
@@ -33,63 +46,87 @@ class _CalibratePageState extends State<CalibratePage> {
 
   Future<void> _load() async {
     try {
-      final img.Image? decoded =
-          img.decodeImage(await File(widget.imagePath).readAsBytes());
+      final Uint8List bytes = await File(widget.imagePath).readAsBytes();
+      // 解码 + EXIF 摆正 + 缩放到预览尺寸，全在 isolate 里做
+      final Uint8List preview = await decodePreviewBytes(bytes);
+      if (!mounted) return;
+      final img.Image? decoded = img.decodeImage(preview);
       if (decoded == null) {
         setState(() => _error = '图片解析失败');
         return;
       }
-      setState(() => _image = decoded);
-      _sampleSelection();
+      setState(() {
+        _previewBytes = preview;
+        _preview = decoded;
+      });
+      _sample();
     } catch (error) {
+      if (!mounted) return;
       setState(() => _error = '读取失败：$error');
     }
   }
 
-  void _sampleSelection() {
-    final img.Image? image = _image;
+  void _sample({int stride = 1}) {
+    final img.Image? image = _preview;
     if (image == null) return;
     final int x = (_selection.left * image.width).round();
     final int y = (_selection.top * image.height).round();
     final int w = (_selection.width * image.width).round();
     final int h = (_selection.height * image.height).round();
-    final WhitePoint white = sampleAverage(image, x, y, w, h);
-
-    // 均匀度：框内亮度的 P5-P95 跨度，复用灰阶靶的判定（<=15 才算能用来标定）
-    final List<int> lum = <int>[];
-    final int x1 = x.clamp(0, image.width - 1);
-    final int y1 = y.clamp(0, image.height - 1);
-    final int x2 = (x + w).clamp(x1 + 1, image.width);
-    final int y2 = (y + h).clamp(y1 + 1, image.height);
-    for (int py = y1; py < y2; py += 2) {
-      for (int px = x1; px < x2; px += 2) {
-        final img.Pixel pixel = image.getPixel(px, py);
-        lum.add((0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b).round());
-      }
-    }
-    double spread = 0;
-    if (lum.length > 4) {
-      lum.sort();
-      final int lo = lum[(lum.length * 0.05).floor()];
-      final int hi = lum[(lum.length * 0.95).floor().clamp(0, lum.length - 1)];
-      spread = (hi - lo).toDouble();
-    }
 
     setState(() {
-      _white = white;
-      _spread = spread;
+      _white = sampleAverage(image, x, y, w, h, stride: stride);
+      _spread = luminanceSpread(image, x, y, w, h, stride: stride < 2 ? 2 : stride);
     });
+  }
+
+  void _onScaleStart(ScaleStartDetails details) {
+    _startWidth = _selection.width;
+    _dragging = true;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    setState(() {
+      if (details.pointerCount == 1) {
+        final Size view = _viewSize;
+        if (view.width > 0 && view.height > 0) {
+          _selection = _selection.translate(
+            details.focalPointDelta.dx / view.width,
+            details.focalPointDelta.dy / view.height,
+          );
+        }
+      } else {
+        // 双指缩放：以起始宽度乘以手势比例（别用上一帧的值，会指数放大）
+        final double next = (_startWidth * details.scale).clamp(0.05, 0.95);
+        _selection = Rect.fromCenter(
+          center: _selection.center,
+          width: next,
+          height: next,
+        );
+      }
+      _clampSelection();
+    });
+    _sample(stride: 4);
+  }
+
+  void _onScaleEnd(ScaleEndDetails details) {
+    _dragging = false;
+    _sample();
   }
 
   @override
   Widget build(BuildContext context) {
-    final img.Image? image = _image;
+    final img.Image? image = _preview;
     return Scaffold(
-      appBar: buildAppBar(context, '框选白纸'),
+      appBar: buildAppBar('框选白纸'),
       body: image == null
           ? Center(
               child: _error != null
-                  ? Text(_error!, style: const TextStyle(color: AppColors.danger))
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(_error!,
+                          style: const TextStyle(color: AppColors.danger)),
+                    )
                   : const CircularProgressIndicator(),
             )
           : Column(
@@ -101,41 +138,27 @@ class _CalibratePageState extends State<CalibratePage> {
                         Size(image.width.toDouble(), image.height.toDouble()),
                         constraints.biggest,
                       );
+                      _viewSize = box;
                       return Center(
                         child: GestureDetector(
-                          onPanUpdate: (DragUpdateDetails details) {
-                            final double dx = details.delta.dx / box.width;
-                            final double dy = details.delta.dy / box.height;
-                            setState(() {
-                              _selection = _selection.shift(Offset(dx, dy));
-                              _clamp();
-                            });
-                            _sampleSelection();
-                          },
-                          onScaleUpdate: (ScaleUpdateDetails details) {
-                            if (details.scale == 1.0) return;
-                            final double next = (_selection.width * details.scale)
-                                .clamp(0.05, 0.95);
-                            setState(() {
-                              _selection = Rect.fromCenter(
-                                center: _selection.center,
-                                width: next,
-                                height: next,
-                              );
-                              _clamp();
-                            });
-                            _sampleSelection();
-                          },
+                          onScaleStart: _onScaleStart,
+                          onScaleUpdate: _onScaleUpdate,
+                          onScaleEnd: _onScaleEnd,
                           child: SizedBox(
                             width: box.width,
                             height: box.height,
                             child: Stack(
                               fit: StackFit.expand,
                               children: <Widget>[
-                                Image.file(File(widget.imagePath),
-                                    fit: BoxFit.fill),
+                                if (_previewBytes != null)
+                                  Image.memory(_previewBytes!,
+                                      gaplessPlayback: true,
+                                      fit: BoxFit.fill),
                                 CustomPaint(
-                                  painter: _SelectionPainter(_selection),
+                                  painter: _SelectionPainter(
+                                    selection: _selection,
+                                    dragging: _dragging,
+                                  ),
                                 ),
                               ],
                             ),
@@ -145,53 +168,82 @@ class _CalibratePageState extends State<CalibratePage> {
                     },
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  color: AppColors.page(context),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        _white == null
-                            ? '正在采样…'
-                            : '平均色 ${_white!}　·　块内跨度 ${_spread?.toStringAsFixed(0) ?? '-'}',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      if (_white != null) ...<Widget>[
-                        const SizedBox(height: 6),
-                        _qualityHint(),
-                      ],
-                      const SizedBox(height: 4),
-                      const Text(
-                        '框住画面里那块白（纸的一角就够），别框到瓷砖或阴影。',
-                        style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                      ),
-                      const SizedBox(height: AppSpacing.md),
-                      FilledButton(
-                        onPressed: _white == null
-                            ? null
-                            : () => Navigator.of(context).pop(_white),
-                        child: const Text('用这个白点'),
-                      ),
-                    ],
-                  ),
-                ),
+                _bottomBar(),
               ],
             ),
     );
   }
 
-  /// 白纸质量自检：沿用 A4 灰阶靶的三条硬指标里能在这里判断的两条。
-  Widget _qualityHint() {
-    final WhitePoint white = _white!;
-    final double luminance =
-        0.2126 * white.r + 0.7152 * white.g + 0.0722 * white.b;
+  Widget _bottomBar() {
+    final WhitePoint? white = _white;
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      color: AppColors.page(context),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: white == null
+                      ? AppColors.line(context)
+                      : Color.fromARGB(
+                          255,
+                          white.r.round().clamp(0, 255),
+                          white.g.round().clamp(0, 255),
+                          white.b.round().clamp(0, 255),
+                        ),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.line(context)),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Text(
+                  white == null
+                      ? '正在采样…'
+                      : '平均色 $white　·　块内跨度 ${_spread?.toStringAsFixed(0) ?? '-'}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          if (white != null) ...<Widget>[
+            const SizedBox(height: 6),
+            _qualityHint(white),
+          ],
+          const SizedBox(height: 4),
+          const Text(
+            '框住画面里那块白（纸的一角就够），别框到瓷砖或阴影。单指拖动移动框，双指缩放调整大小。',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: white == null ? null : () => Navigator.of(context).pop(white),
+              child: const Text('用这个白点'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 白纸质量自检：沿用 A4 灰阶靶的三条硬指标里能在这里判断的。
+  Widget _qualityHint(WhitePoint white) {
     final List<String> issues = <String>[];
-    if (luminance < 235) {
-      issues.add('白参考偏低（${luminance.toStringAsFixed(0)}，应 ≥235）：光不够或相机欠曝');
+    if (white.luminance < 235) {
+      issues.add('白参考偏低（${white.luminance.toStringAsFixed(0)}，应 ≥235）：光不够或相机欠曝');
     }
     if ((_spread ?? 0) > 15) {
       issues.add('块内不匀（跨度 ${_spread!.toStringAsFixed(0)}，应 ≤15）：框里有反光或阴影');
+    }
+    if (white.chromaSpread > 18) {
+      issues.add('这块白偏色（通道差 ${white.chromaSpread.toStringAsFixed(0)}）：可能框到了带颜色的纸');
     }
     if (issues.isEmpty) {
       return const Row(
@@ -226,7 +278,7 @@ class _CalibratePageState extends State<CalibratePage> {
     );
   }
 
-  void _clamp() {
+  void _clampSelection() {
     final double w = _selection.width.clamp(0.05, 0.95);
     final double h = _selection.height.clamp(0.05, 0.95);
     final double left = _selection.left.clamp(0.0, 1 - w);
@@ -247,9 +299,10 @@ class _CalibratePageState extends State<CalibratePage> {
 }
 
 class _SelectionPainter extends CustomPainter {
-  _SelectionPainter(this.selection);
+  _SelectionPainter({required this.selection, required this.dragging});
 
   final Rect selection;
+  final bool dragging;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -281,10 +334,11 @@ class _SelectionPainter extends CustomPainter {
       rect.bottomLeft,
       rect.bottomRight,
     ]) {
-      canvas.drawCircle(p, 6, handle);
+      canvas.drawCircle(p, dragging ? 4 : 6, handle);
     }
   }
 
   @override
-  bool shouldRepaint(_SelectionPainter old) => old.selection != selection;
+  bool shouldRepaint(_SelectionPainter old) =>
+      old.selection != selection || old.dragging != dragging;
 }

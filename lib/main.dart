@@ -18,7 +18,6 @@ class ColorMatchApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: buildTheme(Brightness.light),
       darkTheme: buildTheme(Brightness.dark),
-      themeMode: ThemeMode.system,
       home: const HomePage(),
     );
   }

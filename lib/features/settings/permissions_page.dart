@@ -70,7 +70,7 @@ class _PermissionsPageState extends State<PermissionsPage> {
         });
     if (result.isPermanentlyDenied) {
       if (!mounted) return;
-      showDialog<void>(
+      await showDialog<void>(
         context: context,
         builder: (BuildContext ctx) => AlertDialog(
           title: const Text('需要到系统设置里打开'),
@@ -94,7 +94,7 @@ class _PermissionsPageState extends State<PermissionsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: buildAppBar(context, '权限'),
+      appBar: buildAppBar('权限'),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(

@@ -1,81 +1,84 @@
 # 选色助手（color-match）
 
-装修选色对比：把不同环境（家里 / 门窗厂 / 建材市场）拍的照片**拉到同一光线基准**，排除「照肉灯」这类光源干扰，判断瓷砖、门、美缝到底是不是同一个颜色。
+装修选色对比：把不同环境（家里 / 门窗厂 / 建材市场）拍的照片**拉到同一光线基准**，
+排除「照肉灯」这类光源干扰，判断瓷砖、门、美缝到底是不是同一个颜色。
 
-## 下载
-
-- 介绍文章：<https://www.z7ui.cn/color-match/>
-- 直接下载 APK：<https://www.z7ui.cn/tile-api/apk/color-match/color-match-0.1.0.apk>
-- GitHub Release：<https://github.com/z7ui/color-match/releases/tag/v0.1.0>
+- 文章：<https://www.z7ui.cn/color-match/>
+- 下载：<https://www.z7ui.cn/tile-api/apk/color-match/>
 
 ## 核心链路
 
 ```
-拍照/上传 → 标定（框选白纸/灰卡）→ 拉到基准 → 对比 → 存库 → 导出
+拍照/上传 → 标定（框选白纸）→ 拉到基准 → 对比 → 存库 → 导出
 ```
 
-## 已实现（0.1.0）
+## 功能
 
-- **拍照**：全屏预览 + A4 比例构图框（把白纸/灰卡放进框里）
-- **上传**：从相册选图
-- **标定（穷人版）**：拖动/缩放选框，实时显示平均色，一键把白点拉到 255
-- **对比**：把「目标」拉到「参照」的白点，输出校正前后 ΔE00（CIEDE2000）
-- **存储**：SQLite（会话 / 采集 / 对比），照片存手机内部目录
-- **关于页**：版本、检查更新、公告
-- **算法**：sRGB→Lab、ΔE00、白平衡增益、白点迁移、并排拼图
+- **拍照**：全屏预览 + 构图引导（中间主体框、左下角白纸框），支持切换前后摄
+- **上传**：从相册选图（Android 13+ 走系统照片选择器）
+- **标定**：拖动/缩放选框，实时显示平均色与块内均匀度；自动按 A4 灰阶靶的指标给出「这块白能不能用」
+- **对比**：
+  - 校正前 ΔE —— 两张**原始照片**直接比（你在现场看到的差异）
+  - 校正后 ΔE —— 两张都标定到 255 基准后比（排除光源后的真实色差）
+  - 改善比例、多目标切换、按住看原图
+- **存储**：SQLite（会话 / 采集 / 对比），照片存应用内部目录
+- **导出**：每行「参照 | 目标原图 | 目标校正后」拼成一张图，写入应用目录并另存相册
+- **关于页**：版本、检查更新、公告、权限说明
 
-## 待实现
+## 算法
 
-- 多对一对比（一个参照 vs 多个目标）
-- 富人版标定（24 色卡 → 3×3 CCM）
-- 自动对齐（ORB 特征点）
-- 完整对比报告导出（原图×2 + 校正图 + ΔE + 参数）
-- 光照梯度自检（复用 A4 灰阶靶工具包的判定规则）
-
-## 技术栈
-
-- Flutter（Android）
-- `camera`：相机预览与拍照
-- `image`：解码、缩放、逐像素白平衡
-- `sqflite`：本地库
-- `share_plus`：导出分享
-
-## 算法说明
-
-**白平衡（穷人版）**
+**白平衡**（在**线性光**空间做，不是在 gamma 编码值上直接乘）
 
 ```
-白点 = 框选区域的平均 RGB
-增益 = 255 / 白点（逐通道）
-输出 = 原图 × 增益
+线性增益 = lin(255) / lin(白点)      // 夹在 0.25 ~ 12 之间
+输出     = sRGB( lin(输入) × 增益 )
 ```
 
 **拉到参照**
 
 ```
-目标图 × (参照白点 / 目标白点)   // 保留参照方的白点，不强行拉纯白
+增益 = lin(参照白点) / lin(目标白点)
 ```
 
-**色差**
-
-sRGB → 线性 RGB → XYZ(D65) → Lab → CIEDE2000。
+**色差**：sRGB → 线性 RGB → XYZ(D65) → Lab → CIEDE2000。
+实现与 Sharma 等人的参考数据对齐（单元测试里用标准样本校验）。
 
 判定参考（沿用 A4 灰阶靶工具包）：
 
 | 指标 | 阈值 |
 |---|---|
-| 白参考 | ≥ 235 |
+| 白参考亮度 | ≥ 235 |
 | 光照梯度 | ≤ 6 |
 | 块内跨度 | ≤ 15 |
+
+## 工程约定
+
+- **图像重活全部在后台 isolate**（`lib/core/image_pipeline.dart`）：解码、EXIF 摆正、白平衡、拼图、JPEG 编码，UI 线程不解码大图；
+- **EXIF 统一摆正**（`bakeOrientation`），避免「预览是竖的、采样到的是横的」；
+- **重新标定会让旧对比失效**：改白点后旧的 ΔE 会作废，需要重新对比；
+- **数据库改动走事务**，删参照会连带删掉以它为基准的对比结果；
+- 有 `android/key.properties` 就用正式签名，没有就退回 debug（保证别人 clone 下来能构建）。
 
 ## 构建
 
 ```bash
-flutter pub get
+flutter pub get --offline     # 依赖已在本地缓存时用离线；没有就 flutter pub get
+flutter analyze
+flutter test
 flutter build apk --release
+```
+
+服务器地址在编译期定死（默认 `https://www.z7ui.cn/tile-api`），要换环境就：
+
+```bash
+flutter build apk --release --dart-define=API_BASE_URL=https://你的地址
 ```
 
 ## 数据位置
 
-`getApplicationDocumentsDirectory()/color_match.db`
-`getApplicationDocumentsDirectory()/captures/<session>/...`
+```
+getApplicationDocumentsDirectory()/color_match.db
+getApplicationDocumentsDirectory()/captures/<session>/...
+```
+
+导出的报告图在应用目录 + 相册「ColorMatch」相簿（卸载不丢的那份在相册）。

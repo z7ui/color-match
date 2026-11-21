@@ -81,6 +81,7 @@ class _HomePageState extends State<HomePage> {
         builder: (_) => SessionPage(sessionId: id),
       ),
     );
+    if (!mounted) return;
     _reload();
   }
 
@@ -113,14 +114,15 @@ class _HomePageState extends State<HomePage> {
         await sessionDir.delete(recursive: true);
       }
     } catch (_) {}
+    if (!mounted) return;
     _reload();
-    if (mounted) showSnack(context, '已删除');
+    showSnack(context, '已删除');
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: buildAppBar(context, AppConfig.appName, actions: <Widget>[
+      appBar: buildAppBar(AppConfig.appName, actions: <Widget>[
         IconButton(
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const GuidePage()),
@@ -140,6 +142,32 @@ class _HomePageState extends State<HomePage> {
         future: _future,
         builder: (BuildContext context,
             AsyncSnapshot<List<CompareSession>> snapshot) {
+          if (snapshot.hasError) {
+            // 以前数据库出错就一直转圈，用户只能杀进程
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    const Icon(Icons.error_outline,
+                        size: 48, color: AppColors.danger),
+                    const SizedBox(height: 12),
+                    const Text('读取本地记录失败',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    Text('${snapshot.error}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary)),
+                    const SizedBox(height: AppSpacing.lg),
+                    FilledButton(onPressed: _reload, child: const Text('重试')),
+                  ],
+                ),
+              ),
+            );
+          }
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -170,7 +198,7 @@ class _HomePageState extends State<HomePage> {
           return ListView.separated(
             padding: const EdgeInsets.all(AppSpacing.lg),
             itemCount: sessions.length,
-            separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.md),
+            separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.md),
             itemBuilder: (BuildContext context, int i) {
               final CompareSession s = sessions[i];
               return Card(
@@ -181,6 +209,7 @@ class _HomePageState extends State<HomePage> {
                         builder: (_) => SessionPage(sessionId: s.id),
                       ),
                     );
+                    if (!mounted) return;
                     _reload();
                   },
                   borderRadius: BorderRadius.circular(AppRadius.card),

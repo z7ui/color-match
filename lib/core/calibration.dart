@@ -1,8 +1,9 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
-/// 白点（某个「已知应该是白色」区域的平均 RGB）。
+/// 白点（某个「已知应该是白色」区域的平均 RGB，0-255 浮点）。
 class WhitePoint {
   const WhitePoint(this.r, this.g, this.b);
 
@@ -10,17 +11,72 @@ class WhitePoint {
   final double g;
   final double b;
 
-  bool get isValid => r > 2 && g > 2 && b > 2;
+  /// 低于这个亮度说明用户框到了阴影/深色物体，增益会爆炸。
+  static const double minUsable = 8;
+
+  bool get isValid => r >= minUsable && g >= minUsable && b >= minUsable;
 
   double get luminance => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+  /// 三通道里最暗的那个，用来判断「这块白是否偏色到没法用」。
+  double get minChannel => math.min(r, math.min(g, b));
+
+  /// 通道间最大差异（近似色偏量）。
+  double get chromaSpread =>
+      math.max(r, math.max(g, b)) - math.min(r, math.min(g, b));
 
   @override
   String toString() =>
       '(${r.toStringAsFixed(0)}, ${g.toStringAsFixed(0)}, ${b.toStringAsFixed(0)})';
 }
 
+/// sRGB(0-255) -> 线性光(0-1) 的 256 项查表。
+final Float64List _srgbToLinear = Float64List.fromList(
+  List<double>.generate(256, (int i) {
+    final double c = i / 255.0;
+    return c <= 0.04045
+        ? c / 12.92
+        : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+  }),
+);
+
+/// 线性光(0-1) -> sRGB(0-255)。用 1024 项查表 + 线性插值，避免逐像素 pow。
+final Float64List _linearToSrgb = () {
+  final Float64List table = Float64List(1025);
+  for (int i = 0; i <= 1024; i++) {
+    final double c = i / 1024.0;
+    final double v = c <= 0.0031308
+        ? 12.92 * c
+        : 1.055 * math.pow(c, 1 / 2.4) - 0.055;
+    table[i] = (v * 255.0).clamp(0.0, 255.0);
+  }
+  return table;
+}();
+
+int _encodeSrgb(double linear) {
+  if (linear <= 0) return 0;
+  if (linear >= 1) return 255;
+  final double pos = linear * 1024.0;
+  final int i = pos.floor();
+  final double f = pos - i;
+  final double v = _linearToSrgb[i] * (1 - f) + _linearToSrgb[i + 1] * f;
+  return v.round().clamp(0, 255);
+}
+
+/// 白平衡增益上下限。
+///
+/// 上限不能太紧：室内拍的白纸经常只有 100-150，白点 100 就需要 7.85 倍增益才能到 255，
+/// 卡在 4 倍会导致「标定完白纸还是灰的」（就踩过这个坑）。
+/// 取 12 倍：白点低到 60 还能拉到 205，再暗的框选本身就该被拒（见 WhitePoint.minUsable）。
+const double kMinGain = 0.25;
+const double kMaxGain = 12.0;
+
 /// 在图上取一个矩形区域的平均色（用于框选白纸 / 灰卡）。
-WhitePoint sampleAverage(img.Image image, int x, int y, int w, int h) {
+///
+/// [stride] 每隔多少像素采样一次：拖动过程中用 4/8 降采样，松手后再用 1 精算。
+WhitePoint sampleAverage(img.Image image, int x, int y, int w, int h,
+    {int stride = 1}) {
+  final int step = stride < 1 ? 1 : stride;
   final int x1 = x.clamp(0, image.width - 1);
   final int y1 = y.clamp(0, image.height - 1);
   final int x2 = (x + w).clamp(x1 + 1, image.width);
@@ -30,8 +86,8 @@ WhitePoint sampleAverage(img.Image image, int x, int y, int w, int h) {
   double sg = 0;
   double sb = 0;
   int count = 0;
-  for (int py = y1; py < y2; py++) {
-    for (int px = x1; px < x2; px++) {
+  for (int py = y1; py < y2; py += step) {
+    for (int px = x1; px < x2; px += step) {
       final img.Pixel p = image.getPixel(px, py);
       sr += p.r;
       sg += p.g;
@@ -43,22 +99,57 @@ WhitePoint sampleAverage(img.Image image, int x, int y, int w, int h) {
   return WhitePoint(sr / count, sg / count, sb / count);
 }
 
+/// 框内亮度的 P5–P95 跨度（越小说明这块白越均匀）。用 [stride] 降采样。
+double luminanceSpread(img.Image image, int x, int y, int w, int h,
+    {int stride = 2}) {
+  final int step = stride < 1 ? 1 : stride;
+  final int x1 = x.clamp(0, image.width - 1);
+  final int y1 = y.clamp(0, image.height - 1);
+  final int x2 = (x + w).clamp(x1 + 1, image.width);
+  final int y2 = (y + h).clamp(y1 + 1, image.height);
+  final List<int> lum = <int>[];
+  for (int py = y1; py < y2; py += step) {
+    for (int px = x1; px < x2; px += step) {
+      final img.Pixel p = image.getPixel(px, py);
+      lum.add((0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b).round());
+    }
+  }
+  if (lum.length < 5) return 0;
+  lum.sort();
+  final int lo = lum[((lum.length - 1) * 0.05).floor()];
+  final int hi = lum[((lum.length - 1) * 0.95).floor()];
+  return (hi - lo).toDouble();
+}
+
+/// 增益必须在**线性光**里算。
+///
+/// 如果在 sRGB 数值上算（255/200=1.275）再乘到线性值上，白点 200 只会被拉到 223，
+/// 而不是宣称的 255 —— gamma 编码是凹函数，两种算法差得很明显。
+/// 正确做法：lin(目标) / lin(白点)，用在线性光上刚好把白点落在目标值。
+double _linearGain(double target, double white) {
+  final double w = _srgbToLinear[white.round().clamp(0, 255)];
+  if (w <= 1e-6) return kMaxGain;
+  final double t = _srgbToLinear[target.round().clamp(0, 255)];
+  return (t / w).clamp(kMinGain, kMaxGain);
+}
+
 /// 把整张图的白点拉到 [target]（默认 255）：每个通道乘一个增益。
 ///
-/// 这是「穷人版」校准：一张白纸 / 灰卡就够，不需要色卡。
+/// **在线性光空间做**：sRGB 是 gamma 编码的，直接乘数字相当于改了 gamma，
+/// 会偏色。正确顺序是 sRGB -> 线性 -> 乘增益 -> 回 sRGB。
 img.Image applyWhiteBalance(img.Image source,
     {required WhitePoint white, double target = 255}) {
   final img.Image out = source.clone();
   if (!white.isValid) return out;
 
-  final double gr = target / white.r;
-  final double gg = target / white.g;
-  final double gb = target / white.b;
+  final double gr = _linearGain(target, white.r);
+  final double gg = _linearGain(target, white.g);
+  final double gb = _linearGain(target, white.b);
 
   for (final img.Pixel p in out) {
-    p.r = (p.r * gr).clamp(0, 255);
-    p.g = (p.g * gg).clamp(0, 255);
-    p.b = (p.b * gb).clamp(0, 255);
+    p.r = _encodeSrgb(_srgbToLinear[p.r.toInt().clamp(0, 255)] * gr);
+    p.g = _encodeSrgb(_srgbToLinear[p.g.toInt().clamp(0, 255)] * gg);
+    p.b = _encodeSrgb(_srgbToLinear[p.b.toInt().clamp(0, 255)] * gb);
   }
   return out;
 }
@@ -71,16 +162,24 @@ img.Image transferWhite(img.Image source,
   final img.Image out = source.clone();
   if (!from.isValid || !to.isValid) return out;
 
-  final double gr = to.r / from.r;
-  final double gg = to.g / from.g;
-  final double gb = to.b / from.b;
+  // 相对增益同样要夹在合理范围内：参照极亮、目标极暗时不至于把目标拉爆。
+  final double gr = _linearGain(to.r, from.r);
+  final double gg = _linearGain(to.g, from.g);
+  final double gb = _linearGain(to.b, from.b);
 
   for (final img.Pixel p in out) {
-    p.r = (p.r * gr).clamp(0, 255);
-    p.g = (p.g * gg).clamp(0, 255);
-    p.b = (p.b * gb).clamp(0, 255);
+    p.r = _encodeSrgb(_srgbToLinear[p.r.toInt().clamp(0, 255)] * gr);
+    p.g = _encodeSrgb(_srgbToLinear[p.g.toInt().clamp(0, 255)] * gg);
+    p.b = _encodeSrgb(_srgbToLinear[p.b.toInt().clamp(0, 255)] * gb);
   }
   return out;
+}
+
+/// 解码 + 按 EXIF 摆正（手机竖拍时像素是横的，不摆正会「框到的白纸和采样到的位置」不一致）。
+img.Image? decodeOriented(Uint8List bytes) {
+  final img.Image? decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return img.bakeOrientation(decoded);
 }
 
 /// 缩放，控制处理耗时（对比不需要原图分辨率）。
@@ -92,20 +191,15 @@ img.Image downscale(img.Image source, {int maxSide = 1400}) {
     source,
     width: (source.width * ratio).round(),
     height: (source.height * ratio).round(),
-    interpolation: img.Interpolation.average,
+    interpolation: img.Interpolation.linear,
   );
 }
 
 /// RGB -> Lab（sRGB, D65）。
 List<double> rgbToLab(int r, int g, int b) {
-  double lin(double v) {
-    final double c = v / 255.0;
-    return c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
-  }
-
-  final double rl = lin(r.toDouble());
-  final double gl = lin(g.toDouble());
-  final double bl = lin(b.toDouble());
+  final double rl = _srgbToLinear[r.clamp(0, 255)];
+  final double gl = _srgbToLinear[g.clamp(0, 255)];
+  final double bl = _srgbToLinear[b.clamp(0, 255)];
 
   final double x = rl * 0.4124564 + gl * 0.3575761 + bl * 0.1804375;
   final double y = rl * 0.2126729 + gl * 0.7151522 + bl * 0.0721750;
@@ -162,13 +256,13 @@ double deltaE00(List<double> lab1, List<double> lab2) {
   final double lbp = (l1 + l2) / 2;
   final double cbp = (c1p + c2p) / 2;
 
-  double hbp = h1p + h2p;
-  if (c1p * c2p != 0) {
-    if ((h1p - h2p).abs() > 180) {
-      hbp = h1p + h2p < 360 ? (h1p + h2p + 360) / 2 : (h1p + h2p - 360) / 2;
-    } else {
-      hbp = (h1p + h2p) / 2;
-    }
+  double hbp;
+  if (c1p * c2p == 0) {
+    hbp = h1p + h2p;
+  } else if ((h1p - h2p).abs() <= 180) {
+    hbp = (h1p + h2p) / 2;
+  } else {
+    hbp = h1p + h2p < 360 ? (h1p + h2p + 360) / 2 : (h1p + h2p - 360) / 2;
   }
 
   final double t = 1 -
@@ -192,3 +286,7 @@ double deltaE00(List<double> lab1, List<double> lab2) {
 
   return math.sqrt(dl * dl + dc * dc + dh * dh + rt * dc * dh);
 }
+
+/// 直接算两个 RGB 的 ΔE00（UI/测试用）。
+double deltaE00Rgb(int r1, int g1, int b1, int r2, int g2, int b2) =>
+    deltaE00(rgbToLab(r1, g1, b1), rgbToLab(r2, g2, b2));

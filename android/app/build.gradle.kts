@@ -25,10 +25,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.z7ui.color_match"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
@@ -39,9 +36,11 @@ android {
         versionName = flutter.versionName
     }
 
+    // 有 key.properties 就用正式密钥；没有就退回 debug，保证别人 clone 下来也能构建
+    // （原来是：release 无条件 getByName("release")，缺密钥时报的是「missing storeFile」，很难懂）
     signingConfigs {
-        create("release") {
-            if (keystorePropertiesFile.exists()) {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
                 keyAlias = keystoreProperties["keyAlias"] as String
@@ -52,8 +51,10 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
-            // Dart 代码走 AOT，R8 只处理壳和插件；开着会让打包从 1 分钟变 30 分钟，收益很小
+            signingConfig = signingConfigs.getByName(
+                if (keystorePropertiesFile.exists()) "release" else "debug"
+            )
+            // Dart 代码走 AOT，R8 只处理壳和插件；Flutter 壳本来就小，开不开差别不大
             isMinifyEnabled = false
             isShrinkResources = false
         }

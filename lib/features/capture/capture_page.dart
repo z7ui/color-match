@@ -1,9 +1,13 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
-/// 拍照页：全屏预览 + 构图指示（中间一个 A4 比例的框）。
+/// 拍照页：全屏预览 + 构图指示（中间一个主体框，左下角白纸框）。
 ///
-/// 构图指示不是装饰：它让用户把白纸/灰卡放在固定位置，之后标定框选更稳。
+/// 两个稳定性要点：
+/// * **跟随生命周期**：切后台/来电/权限弹窗时释放相机，回来重建；不处理的话
+///   回来就是黑屏（Android 上相机会被别的 App 抢走）。
+/// * **切换摄像头要先把旧 controller 置空**：否则 build 期间可能用到已 dispose
+///   的实例，抛「CameraController was used after being disposed」。
 class CapturePage extends StatefulWidget {
   const CapturePage({super.key, required this.role, required this.sessionId});
 
@@ -14,50 +18,86 @@ class CapturePage extends StatefulWidget {
   State<CapturePage> createState() => _CapturePageState();
 }
 
-class _CapturePageState extends State<CapturePage> {
+class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   CameraController? _controller;
   List<CameraDescription> _cameras = <CameraDescription>[];
   int _index = 0;
   bool _ready = false;
   bool _busy = false;
+  bool _switching = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _init();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _releaseCamera();
+    } else if (state == AppLifecycleState.resumed && !_ready && _error == null) {
+      _init();
+    }
+  }
+
+  Future<void> _releaseCamera() async {
+    final CameraController? controller = _controller;
+    // 先断开引用，再 dispose：这样即使有 rebuild 也不会碰到已释放的实例
+    setState(() {
+      _controller = null;
+      _ready = false;
+    });
+    if (controller != null) {
+      try {
+        await controller.dispose();
+      } catch (_) {}
+    }
   }
 
   Future<void> _init() async {
     try {
       _cameras = await availableCameras();
       if (_cameras.isEmpty) {
-        setState(() => _error = '没有可用摄像头');
+        if (mounted) setState(() => _error = '没有可用摄像头');
         return;
       }
       await _open(0);
     } catch (error) {
-      setState(() => _error = '相机启动失败：$error');
+      if (mounted) setState(() => _error = '相机启动失败：' + error.toString());
     }
   }
 
   Future<void> _open(int index) async {
-    await _controller?.dispose();
-    final CameraController controller = CameraController(
-      _cameras[index],
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    await controller.initialize();
-    if (!mounted) {
-      await controller.dispose();
-      return;
+    if (_switching) return;
+    _switching = true;
+    try {
+      await _releaseCamera();
+      final CameraController controller = CameraController(
+        _cameras[index],
+        // 选色要给足分辨率：high 只有 720p，白点采样精度会打折
+        ResolutionPreset.veryHigh,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _controller = controller;
+        _index = index;
+        _ready = true;
+        _error = null;
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = '相机启动失败：' + error.toString());
+    } finally {
+      _switching = false;
     }
-    setState(() {
-      _controller = controller;
-      _index = index;
-      _ready = true;
-    });
   }
 
   Future<void> _shoot() async {
@@ -72,20 +112,24 @@ class _CapturePageState extends State<CapturePage> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = '拍照失败：$error';
+        _error = '拍照失败：' + error.toString();
       });
     }
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    final CameraController? controller = _controller;
+    _controller = null;
+    controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final bool isReference = widget.role == 'reference';
+    final CameraController? controller = _controller;
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -95,7 +139,7 @@ class _CapturePageState extends State<CapturePage> {
         actions: <Widget>[
           if (_cameras.length > 1)
             IconButton(
-              onPressed: () => _open((_index + 1) % _cameras.length),
+              onPressed: _switching ? null : () => _open((_index + 1) % _cameras.length),
               icon: const Icon(Icons.flip_camera_ios),
               tooltip: '切换摄像头',
             ),
@@ -109,11 +153,11 @@ class _CapturePageState extends State<CapturePage> {
                     style: const TextStyle(color: Colors.white, height: 1.6)),
               ),
             )
-          : _ready && _controller != null
+          : (_ready && controller != null)
               ? Stack(
                   fit: StackFit.expand,
                   children: <Widget>[
-                    CameraPreview(_controller!),
+                    CameraPreview(controller),
                     const _GuideOverlay(),
                     Positioned(
                       left: 0,
@@ -141,7 +185,8 @@ class _CapturePageState extends State<CapturePage> {
                               child: _busy
                                   ? const Padding(
                                       padding: EdgeInsets.all(22),
-                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                      child:
+                                          CircularProgressIndicator(strokeWidth: 2),
                                     )
                                   : const Icon(Icons.camera_alt,
                                       color: Colors.black, size: 32),
@@ -169,14 +214,12 @@ class _GuideOverlay extends StatelessWidget {
         final double w = constraints.maxWidth;
         final double h = constraints.maxHeight;
 
-        // 主体框：水平居中偏上，占宽 72%、高 46%
         final Rect subject = Rect.fromCenter(
           center: Offset(w / 2, h * 0.40),
           width: w * 0.72,
           height: h * 0.46,
         );
 
-        // 白纸框：左下角，占宽 24%
         final double paperW = w * 0.24;
         final Rect paper = Rect.fromLTWH(
           w * 0.06,
@@ -267,6 +310,7 @@ class _DashedBoxPainter extends CustomPainter {
 
     void dashed(Offset from, Offset to) {
       final double total = (to - from).distance;
+      if (total <= 0) return;
       final Offset dir = (to - from) / total;
       double t = 0;
       while (t < total) {

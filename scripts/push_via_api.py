@@ -101,8 +101,17 @@ def main() -> None:
     except Exception:
         parent_sha = None
 
+    # 提交信息取本地 HEAD 的真实信息。
+    # 以前这里写死一句话，于是 12 个提交全是同一行，历史完全看不出改了什么。
+    subject = subprocess.run(
+        ["git", "log", "-1", "--format=%B"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() or "chore: sync snapshot"
+
     commit_payload: dict = {
-        "message": "feat: 选色助手 MVP —— 拍照/标定/两两与多对一对比/导出",
+        "message": subject,
         "tree": tree["sha"],
     }
     if parent_sha:

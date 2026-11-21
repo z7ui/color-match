@@ -1,5 +1,5 @@
-/// 数据模型：一次对比 = 一个 session，里面至少两张 capture（参照 + 目标），
-/// 外加一条 comparison（处理结果）。
+// 数据模型：一次对比 = 一个 session，里面至少两张 capture（参照 + 目标），
+// 外加一条 comparison（处理结果）。
 
 class CompareSession {
   const CompareSession({
@@ -56,6 +56,10 @@ class Capture {
   final DateTime createdAt;
 
   bool get isReference => role == 'reference';
+  bool get isCalibrated => whiteR != null && whiteG != null && whiteB != null;
+
+  /// 显示用的编号（UUID 前 4 位对用户没有意义，但至少要稳定）。
+  String get shortId => id.length >= 4 ? id.substring(0, 4) : id;
 }
 
 class Comparison {
@@ -67,6 +71,7 @@ class Comparison {
     required this.processedPath,
     required this.deltaE,
     required this.createdAt,
+    this.deltaEBefore = 0,
     this.note = '',
   });
 
@@ -78,10 +83,20 @@ class Comparison {
   /// 把目标图拉到参照基准后的成品图。
   final String processedPath;
 
-  /// 主色块平均 ΔE00（越小越接近）。
+  /// 校正后 ΔE00（越小越接近）。
   final double deltaE;
+
+  /// 校正前 ΔE00（两张原始照片直接比）。
+  final double deltaEBefore;
+
   final String note;
   final DateTime createdAt;
+
+  /// 改善比例，夹在 0..1。
+  double get improvement {
+    if (deltaEBefore <= 0.01) return 0;
+    return ((deltaEBefore - deltaE) / deltaEBefore).clamp(0.0, 1.0);
+  }
 }
 
 /// 详情页用：session + 参照图 + 多张目标图 + 对比结果。
@@ -107,4 +122,9 @@ class SessionDetail {
   Comparison? comparisonFor(String targetId) => comparisons[targetId];
 
   int get comparedCount => comparisons.length;
+
+  /// 已标定但还没对比的目标数量（「全部对比」按钮上的数字）。
+  int get pendingCount => targets
+      .where((Capture t) => t.isCalibrated && !comparisons.containsKey(t.id))
+      .length;
 }
