@@ -124,6 +124,16 @@ class Comparison {
   }
 }
 
+/// 列表页用：一个会话里有多少采集、多少对比（决定图标要不要"空"）。
+class SessionStat {
+  const SessionStat({this.captures = 0, this.comparisons = 0});
+
+  final int captures;
+  final int comparisons;
+
+  bool get isEmpty => captures == 0;
+}
+
 /// 详情页用：session + 参照图 + 多张目标图 + 对比结果。
 class SessionDetail {
   const SessionDetail({

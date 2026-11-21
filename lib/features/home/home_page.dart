@@ -23,11 +23,13 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   late Future<List<CompareSession>> _future;
+  Map<String, SessionStat> _stats = <String, SessionStat>{};
 
   @override
   void initState() {
     super.initState();
     _future = AppDb.instance.listSessions();
+    _loadStats();
     Diag.pending.addListener(_onDiagCommand);
     // 冷启动时可能已经有命令在排队
     WidgetsBinding.instance.addPostFrameCallback((_) => _onDiagCommand());
@@ -66,6 +68,16 @@ class _HomePageState extends State<HomePage> {
 
   void _reload() {
     setState(() => _future = AppDb.instance.listSessions());
+    _loadStats();
+  }
+
+  /// 列表要显示「这个项目是不是空的」，所以顺带把每个会话的采集/对比数取回来。
+  Future<void> _loadStats() async {
+    try {
+      final Map<String, SessionStat> stats = await AppDb.instance.stats();
+      if (!mounted) return;
+      setState(() => _stats = stats);
+    } catch (_) {}
   }
 
   Future<void> _create() async {
@@ -201,6 +213,29 @@ class _HomePageState extends State<HomePage> {
     showSnack(context, '已删除');
   }
 
+  /// 有内容的项目用实心图标；空项目用空心虚线感，不看名字也能一眼分辨。
+  Widget _sessionIcon(SessionStat stat) {
+    final bool empty = stat.isEmpty;
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: empty
+            ? Colors.transparent
+            : AppColors.primary.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: empty
+            ? Border.all(color: AppColors.line(context), width: 1.5)
+            : null,
+      ),
+      child: Icon(
+        empty ? Icons.add_photo_alternate_outlined : Icons.compare,
+        color: empty ? AppColors.textHint : AppColors.primary,
+        size: empty ? 20 : 24,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -306,23 +341,42 @@ class _HomePageState extends State<HomePage> {
                     padding: const EdgeInsets.all(AppSpacing.md),
                     child: Row(
                       children: <Widget>[
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.compare, color: AppColors.primary),
+                        _sessionIcon(
+                          _stats[s.id] ?? const SessionStat(),
                         ),
                         const SizedBox(width: AppSpacing.md),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
-                              Text(s.name,
-                                  style: const TextStyle(
-                                      fontSize: 15, fontWeight: FontWeight.w600)),
+                              Row(
+                                children: <Widget>[
+                                  Flexible(
+                                    child: Text(s.name,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w600)),
+                                  ),
+                                  if ((_stats[s.id] ?? const SessionStat()).isEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 6),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.line(context),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                        ),
+                                        child: Text('空项目',
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                color: AppColors.sub(context))),
+                                      ),
+                                    ),
+                                ],
+                              ),
                               const SizedBox(height: 2),
                               Text(
                                 '${s.createdAt.year}-${s.createdAt.month.toString().padLeft(2, '0')}-${s.createdAt.day.toString().padLeft(2, '0')}'

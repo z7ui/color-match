@@ -719,6 +719,8 @@ class _SessionPageState extends State<SessionPage> {
       padding: const EdgeInsets.fromLTRB(
           AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xl),
       children: <Widget>[
+        _nextStepBanner(detail),
+        const SizedBox(height: AppSpacing.sm),
         _sectionTitle('参照（家里，基准）'),
         _captureRow(detail.reference,
             role: 'reference', title: '参照图', isReference: true),
@@ -765,6 +767,98 @@ class _SessionPageState extends State<SessionPage> {
           _resultSection(detail),
         ],
       ],
+    );
+  }
+
+  /// 顶部引导：永远告诉用户「下一步该做什么」，而不是让他自己找。
+  Widget _nextStepBanner(SessionDetail detail) {
+    final Capture? reference = detail.reference;
+    final int uncalibrated =
+        detail.targets.where((Capture t) => !t.isCalibrated).length;
+    final int calibratedTargets =
+        detail.targets.where((Capture t) => t.isCalibrated).length;
+    final int pending = detail.pendingCount;
+
+    late final String text;
+    late final IconData icon;
+    late final Color color;
+    if (reference == null) {
+      text = '第一步：拍一张家里的参照图（把白纸露一个角）';
+      icon = Icons.home_outlined;
+      color = AppColors.warning;
+    } else if (!reference.isCalibrated) {
+      text = '参照图还没标定 · 点下面的「标定」框住那块白纸';
+      icon = Icons.center_focus_strong_outlined;
+      color = AppColors.warning;
+    } else if (detail.targets.isEmpty) {
+      text = '第二步：拍工地 / 门店的样品';
+      icon = Icons.add_a_photo_outlined;
+      color = AppColors.primary;
+    } else if (uncalibrated > 0) {
+      text = '有 ' + uncalibrated.toString() + ' 张目标图还没标定';
+      icon = Icons.center_focus_strong_outlined;
+      color = AppColors.warning;
+    } else if (pending > 0) {
+      text = '有 ' +
+          pending.toString() +
+          ' 组还没对比 · 点下面的「全部对比」';
+      icon = Icons.compare_arrows;
+      color = AppColors.primary;
+    } else {
+      text = '准备就绪：已标定 ' +
+          calibratedTargets.toString() +
+          ' 张目标、完成 ' +
+          detail.comparedCount.toString() +
+          ' 组对比';
+      icon = Icons.check_circle_outline;
+      color = AppColors.success;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                    color: color)),
+          ),
+          if (detail.targets.isNotEmpty && uncalibrated == 0 && pending > 0)
+            TextButton(
+              onPressed: _busy ? null : _compareAll,
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, 32),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              child: const Text('去对比', style: TextStyle(fontSize: 12)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 一小块状态徽章：绿=已标定，橙=未标定，蓝=已对比。
+  Widget _statusChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 10.5, fontWeight: FontWeight.w700, color: color)),
     );
   }
 
@@ -842,6 +936,18 @@ class _SessionPageState extends State<SessionPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          // 左侧竖条：没标定就是橙色，一眼能扫出来
+          Container(
+            width: 3,
+            height: 84,
+            margin: const EdgeInsets.only(right: 8),
+            decoration: BoxDecoration(
+              color: capture.isCalibrated
+                  ? AppColors.success
+                  : AppColors.warning,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
           GestureDetector(
             onTap: () => _openViewer(
               <String>[capture.imagePath],
@@ -864,14 +970,28 @@ class _SessionPageState extends State<SessionPage> {
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    Text(title,
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w600)),
+                    Flexible(
+                      child: Text(title,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
                     const SizedBox(width: 6),
                     if (comparison != null)
                       Text('ΔE ' + comparison.deltaE.toString(),
                           style: const TextStyle(
                               fontSize: 12, color: AppColors.success)),
+                    const SizedBox(width: 4),
+                    _statusChip(
+                      comparison != null
+                          ? '已对比'
+                          : (capture.isCalibrated ? '已标定' : '未标定'),
+                      comparison != null
+                          ? AppColors.primary
+                          : (capture.isCalibrated
+                              ? AppColors.success
+                              : AppColors.warning),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -895,8 +1015,23 @@ class _SessionPageState extends State<SessionPage> {
                 ),
                 Wrap(
                   children: <Widget>[
-                    _miniBtn('标定', () => _calibrate(capture),
-                        enabled: !_busy),
+                    if (!capture.isCalibrated)
+                      FilledButton.tonalIcon(
+                        onPressed: _busy ? null : () => _calibrate(capture),
+                        icon: const Icon(Icons.center_focus_strong_outlined,
+                            size: 16),
+                        label: const Text('现在标定',
+                            style: TextStyle(fontSize: 12)),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(0, 32),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 10),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      )
+                    else
+                      _miniBtn('重新标定', () => _calibrate(capture),
+                          enabled: !_busy),
                     if (isReference)
                       _miniBtn('换图', _replaceReference, enabled: !_busy)
                     else ...<Widget>[

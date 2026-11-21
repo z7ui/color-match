@@ -193,6 +193,29 @@ class AppDb {
     return files;
   }
 
+  /// 每个会话的采集数 / 对比数（列表页判断"空项目"用，一条 SQL 搞定）。
+  Future<Map<String, SessionStat>> stats() async {
+    final Database d = await db;
+    final Map<String, int> captures = <String, int>{};
+    final Map<String, int> comparisons = <String, int>{};
+    for (final Map<String, Object?> row in await d.rawQuery(
+        'SELECT session_id, COUNT(*) AS n FROM captures GROUP BY session_id')) {
+      captures['${row['session_id']}'] = (row['n'] as num).toInt();
+    }
+    for (final Map<String, Object?> row in await d.rawQuery(
+        'SELECT session_id, COUNT(*) AS n FROM comparisons GROUP BY session_id')) {
+      comparisons['${row['session_id']}'] = (row['n'] as num).toInt();
+    }
+    final Set<String> keys = <String>{...captures.keys, ...comparisons.keys};
+    return <String, SessionStat>{
+      for (final String key in keys)
+        key: SessionStat(
+          captures: captures[key] ?? 0,
+          comparisons: comparisons[key] ?? 0,
+        ),
+    };
+  }
+
   // ---------------------------------------------------------------- captures
 
   Future<List<Capture>> capturesOf(String sessionId) async {

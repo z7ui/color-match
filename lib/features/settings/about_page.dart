@@ -137,6 +137,8 @@ class _AboutPageState extends State<AboutPage> {
                       _versionTaps = 0;
                       Navigator.of(context).push(MaterialPageRoute<void>(
                           builder: (_) => const DiagPage()));
+                    } else if (_versionTaps == 3) {
+                      showSnack(context, '再点 4 次进入诊断（不需要 ADB）');
                     }
                   },
                   child: Text('v' + AppConfig.appVersion + ' (' + AppConfig.buildNumber.toString() + ')',
