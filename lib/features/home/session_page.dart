@@ -20,6 +20,7 @@ import '../capture/capture_page.dart';
 import '../capture/calibrate_page.dart';
 import '../viewer/photo_view_page.dart';
 import 'comparison_detail_page.dart';
+import 'location_picker.dart';
 
 /// 会话详情：一个参照（家里，基准）+ 多个目标（厂里 / 别的环境）。
 ///
@@ -124,75 +125,8 @@ class _SessionPageState extends State<SessionPage> {
 
   /// 给这张图打个「光」的标签：同一块样品换几个光源拍，才能看出是不是同色异谱。
   Future<void> _askLocation(String captureId) async {
-    const List<String> presets = <String>[
-      '家里·顶灯',
-      '家里·窗边自然光',
-      '门店·射灯',
-      '门店·顶灯',
-      '室外',
-    ];
-    final String? picked = await showModalBottomSheet<String>(
-      context: context,
-      builder: (BuildContext ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('这张是在哪拍的？什么光？（可跳过）',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            ...presets.map((String value) => ListTile(
-                  dense: true,
-                  title: Text(value, style: const TextStyle(fontSize: 14)),
-                  onTap: () => Navigator.pop(ctx, value),
-                )),
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.edit_outlined, size: 18),
-              title: const Text('自定义…', style: TextStyle(fontSize: 14)),
-              onTap: () => Navigator.pop(ctx, '__custom__'),
-            ),
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.close, size: 18),
-              title: const Text('跳过', style: TextStyle(fontSize: 14)),
-              onTap: () => Navigator.pop(ctx),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (!mounted || picked == null) return;
-    String label = picked;
-    if (picked == '__custom__') {
-      final TextEditingController controller = TextEditingController();
-      final String? custom = await showDialog<String>(
-        context: context,
-        builder: (BuildContext ctx) => AlertDialog(
-          title: const Text('光源 / 地点'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(hintText: '比如：门店东侧射灯'),
-          ),
-          actions: <Widget>[
-            TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('保存'),
-            ),
-          ],
-        ),
-      );
-      controller.dispose();
-      if (custom == null || custom.isEmpty) return;
-      label = custom;
-    }
+    final String? label = await showLocationPicker(context);
+    if (label == null || !mounted) return;
     await AppDb.instance.updateCaptureLocation(captureId, label);
     await _load();
   }
@@ -495,8 +429,8 @@ class _SessionPageState extends State<SessionPage> {
     final Comparison? comparison = detail?.comparisons[target.id];
     if (detail == null || reference == null || comparison == null) return;
 
-    final bool? deleted = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
+    final String? result = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
         builder: (_) => ComparisonDetailPage(
           sessionName: detail.session.name,
           reference: reference,
@@ -505,11 +439,14 @@ class _SessionPageState extends State<SessionPage> {
         ),
       ),
     );
-    if (deleted == true) {
+    if (result == 'deleted') {
       await AppDb.instance.deleteComparison(widget.sessionId, target.id);
       await _deleteQuietly(comparison.processedPath);
       await _load();
       if (mounted) showSnack(context, '已删除这条对比');
+    } else if (result == 'changed') {
+      // 只改了光源标签，刷新一下就行
+      await _load();
     }
   }
 

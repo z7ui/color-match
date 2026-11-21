@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_theme.dart';
+import '../../core/db.dart';
 import '../../core/models.dart';
 import '../../core/storage.dart';
 import '../viewer/photo_view_page.dart';
+import 'location_picker.dart';
 
 /// 单组对比的详情页：三张图 + 这一组用到的所有参数。
 ///
@@ -32,13 +34,47 @@ class ComparisonDetailPage extends StatefulWidget {
 
 class _ComparisonDetailPageState extends State<ComparisonDetailPage> {
   bool _busy = false;
+  late String _refLocation;
+  late String _targetLocation;
+  bool _changed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refLocation = widget.reference.location;
+    _targetLocation = widget.target.location;
+  }
+
+  /// 改「这张图是在什么光下拍的」标签。选错了不用重拍，这里能改。
+  Future<void> _editLocation({required bool isReference}) async {
+    final String current = isReference ? _refLocation : _targetLocation;
+    final String? picked = await showLocationPicker(context, current: current);
+    if (picked == null || !mounted) return;
+    final Capture capture = isReference ? widget.reference : widget.target;
+    await AppDb.instance.updateCaptureLocation(capture.id, picked);
+    if (!mounted) return;
+    setState(() {
+      if (isReference) {
+        _refLocation = picked;
+      } else {
+        _targetLocation = picked;
+      }
+      _changed = true;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final Comparison c = widget.comparison;
     final Capture ref = widget.reference;
     final Capture target = widget.target;
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        Navigator.of(context).pop(_changed ? 'changed' : null);
+      },
+      child: Scaffold(
       appBar: buildAppBar('对比详情'),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -46,14 +82,14 @@ class _ComparisonDetailPageState extends State<ComparisonDetailPage> {
           _imageBlock(
             context,
             title: '家里（基准）',
-            subtitle: ref.location.isEmpty ? '原图，未做任何处理' : ref.location,
+            subtitle: _refLocation.isEmpty ? '原图，未做任何处理' : _refLocation,
             path: ref.imagePath,
             accent: AppColors.primary,
           ),
           _imageBlock(
             context,
             title: '工地（原图）',
-            subtitle: target.location.isEmpty ? '拍摄原始画面' : target.location,
+            subtitle: _targetLocation.isEmpty ? '拍摄原始画面' : _targetLocation,
             path: target.imagePath,
             accent: AppColors.warning,
           ),
@@ -109,8 +145,10 @@ class _ComparisonDetailPageState extends State<ComparisonDetailPage> {
                   _kv('工地白点', _white(target)),
                   if (ref.hasChecker) _kv('家里已知物', _checker(ref)),
                   if (target.hasChecker) _kv('工地已知物', _checker(target)),
-                  _kv('家里光源', ref.location.isEmpty ? '未标注' : ref.location),
-                  _kv('工地光源', target.location.isEmpty ? '未标注' : target.location),
+                  _locationRow('家里光源', _refLocation,
+                      onEdit: () => _editLocation(isReference: true)),
+                  _locationRow('工地光源', _targetLocation,
+                      onEdit: () => _editLocation(isReference: false)),
                   if (target.usedTorch || ref.usedTorch)
                     _kv('补光',
                         (ref.usedTorch ? '家里开了' : '') +
@@ -149,6 +187,7 @@ class _ComparisonDetailPageState extends State<ComparisonDetailPage> {
             style: TextButton.styleFrom(foregroundColor: AppColors.danger),
           ),
         ],
+      ),
       ),
     );
   }
@@ -220,6 +259,37 @@ class _ComparisonDetailPageState extends State<ComparisonDetailPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 可编辑的一行：光源标签（右边一个铅笔）。
+  Widget _locationRow(String key, String value, {required VoidCallback onEdit}) {
+    return InkWell(
+      onTap: onEdit,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            SizedBox(
+              width: 96,
+              child: Text(key,
+                  style: TextStyle(
+                      fontSize: 12, color: AppColors.sub(context))),
+            ),
+            Expanded(
+              child: Text(
+                value.isEmpty ? '未标注（点这里设置）' : value,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: value.isEmpty ? AppColors.textHint : AppColors.text),
+              ),
+            ),
+            const Icon(Icons.edit_outlined, size: 15, color: AppColors.textHint),
+          ],
+        ),
       ),
     );
   }
@@ -325,6 +395,6 @@ class _ComparisonDetailPageState extends State<ComparisonDetailPage> {
     if (ok != true) return;
     // 由调用方（会话页）删文件 + 刷新，这里只负责返回结果
     if (!mounted) return;
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop('deleted');
   }
 }

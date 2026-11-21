@@ -2,7 +2,7 @@ name: color_match
 description: "选色助手：把不同环境拍的照片拉到同一光线基准，比较瓷砖 / 门窗 / 美缝的颜色差异。"
 publish_to: 'none'
 
-version: 0.1.20+21
+version: 0.1.21+22
 
 environment:
   sdk: ^3.13.7

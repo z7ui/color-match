@@ -3,8 +3,8 @@ class AppConfig {
   AppConfig._();
 
   static const String appName = '选色助手';
-  static const String appVersion = '0.1.20';
-  static const int buildNumber = 21;
+  static const String appVersion = '0.1.21';
+  static const int buildNumber = 22;
 
   /// 检查更新 / 公告复用同一台服务器（和余砖管家同一个后端）。
   static const String defaultBaseUrl = 'https://www.z7ui.cn/tile-api';

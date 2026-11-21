@@ -166,6 +166,97 @@ class _BackupPageState extends State<BackupPage> {
     }
   }
 
+  /// 清空「导出的报告图」（exports 根目录下的文件，backup 子目录不动）。
+  Future<void> _clearExports() async {
+    final Directory dir = await exportDir();
+    final List<File> files = <File>[];
+    if (await dir.exists()) {
+      await for (final FileSystemEntity e in dir.list()) {
+        if (e is File) files.add(e);
+      }
+    }
+    await _clearFiles(
+      title: '清空导出目录？',
+      hint: '会删掉 ' +
+          files.length.toString() +
+          ' 个导出文件（报告图 / CSV / JSON）。照片和数据库不受影响。',
+      files: files,
+      folder: dir.path,
+    );
+  }
+
+  /// 清空备份（exports/backup/*.db）。
+  Future<void> _clearBackups() async {
+    final Directory dir = await _backupDir();
+    final List<File> files = <File>[];
+    if (await dir.exists()) {
+      await for (final FileSystemEntity e in dir.list()) {
+        if (e is File && e.path.toLowerCase().endsWith('.db')) files.add(e);
+      }
+    }
+    await _clearFiles(
+      title: '清空所有备份？',
+      hint: '会删掉 ' +
+          files.length.toString() +
+          ' 份 .db 备份。当前数据库不受影响，但删了就回不去旧版本了。',
+      files: files,
+      folder: dir.path,
+    );
+  }
+
+  Future<void> _clearFiles({
+    required String title,
+    required String hint,
+    required List<File> files,
+    required String folder,
+  }) async {
+    if (files.isEmpty) {
+      showSnack(context, '这里已经是空的');
+      return;
+    }
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(hint),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    int removed = 0;
+    int bytes = 0;
+    for (final File file in files) {
+      try {
+        bytes += await file.length();
+        await file.delete();
+        removed++;
+      } catch (_) {}
+    }
+    await _scan();
+    await _loadUsage();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _status = '已删除 ' +
+          removed.toString() +
+          ' 个文件，释放 ' +
+          Diag.readSize(bytes) +
+          '（' +
+          folder +
+          '）';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -238,6 +329,28 @@ class _BackupPageState extends State<BackupPage> {
                   subtitle: const Text('带会话 / 采集 / 对比三层结构，适合留档'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _busy ? null : () => _export(true),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Card(
+            child: Column(
+              children: <Widget>[
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_outlined),
+                  title: const Text('清空导出目录'),
+                  subtitle: const Text('删掉导出的报告图 / CSV / JSON（不动照片和数据库）'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _busy ? null : _clearExports,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.delete_forever_outlined),
+                  title: const Text('清空所有备份'),
+                  subtitle: const Text('删掉历史 .db 备份（当前数据不受影响）'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _busy ? null : _clearBackups,
                 ),
               ],
             ),
