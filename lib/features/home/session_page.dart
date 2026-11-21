@@ -38,6 +38,9 @@ class _SessionPageState extends State<SessionPage> {
   /// 结果区当前看的是第几个目标（多目标时切换）
   int _resultIndex = 0;
 
+  /// 按住「看原图」时，结果区右半边显示未校正的目标原图
+  bool _showBefore = false;
+
   @override
   void initState() {
     super.initState();
@@ -696,10 +699,13 @@ class _SessionPageState extends State<SessionPage> {
 
     // 删除目标后索引可能越界
     if (_resultIndex >= comparedTargets.length) _resultIndex = 0;
+    // 切换目标/重新进入时，保证右半边是校正后状态
+    // （按住按钮时 _showBefore 由手势实时控制）
     final Capture target = comparedTargets[_resultIndex];
     final Comparison comparison = detail.comparisons[target.id]!;
     final String refPath = reference.calibratedPath ?? reference.imagePath;
     final String outPath = comparison.processedPath;
+    final String rightPath = _showBefore ? target.imagePath : outPath;
     final bool multi = comparedTargets.length > 1;
 
     return Column(
@@ -714,7 +720,10 @@ class _SessionPageState extends State<SessionPage> {
               IconButton(
                 onPressed: _resultIndex == 0
                     ? null
-                    : () => setState(() => _resultIndex--),
+                    : () => setState(() {
+                          _resultIndex--;
+                          _showBefore = false;
+                        }),
                 icon: const Icon(Icons.chevron_left, size: 20),
                 visualDensity: VisualDensity.compact,
                 tooltip: '上一个目标',
@@ -724,7 +733,10 @@ class _SessionPageState extends State<SessionPage> {
               IconButton(
                 onPressed: _resultIndex == comparedTargets.length - 1
                     ? null
-                    : () => setState(() => _resultIndex++),
+                    : () => setState(() {
+                          _resultIndex++;
+                          _showBefore = false;
+                        }),
                 icon: const Icon(Icons.chevron_right, size: 20),
                 visualDensity: VisualDensity.compact,
                 tooltip: '下一个目标',
@@ -746,7 +758,10 @@ class _SessionPageState extends State<SessionPage> {
                   label: Text('${t.id.substring(0, 4)} · ΔE ${c.deltaE}',
                       style: const TextStyle(fontSize: 11)),
                   selected: i == _resultIndex,
-                  onSelected: (_) => setState(() => _resultIndex = i),
+                  onSelected: (_) => setState(() {
+                    _resultIndex = i;
+                    _showBefore = false;
+                  }),
                   visualDensity: VisualDensity.compact,
                 );
               },
@@ -755,10 +770,12 @@ class _SessionPageState extends State<SessionPage> {
         const SizedBox(height: 6),
         GestureDetector(
           onTap: () => _openViewer(
-            <String>[refPath, outPath],
+            <String>[refPath, rightPath],
             <String>[
               '参照（家里）',
-              '目标 ${target.id.substring(0, 4)}（校正后）'
+              _showBefore
+                  ? '目标 ${target.id.substring(0, 4)}（原始）'
+                  : '目标 ${target.id.substring(0, 4)}（校正后）'
             ],
             0,
           ),
@@ -774,7 +791,7 @@ class _SessionPageState extends State<SessionPage> {
                   ),
                   Container(width: 2, color: AppColors.line(context)),
                   Expanded(
-                    child: Image.file(File(outPath),
+                    child: Image.file(File(rightPath),
                         fit: BoxFit.cover, alignment: Alignment.center),
                   ),
                 ],
@@ -785,16 +802,64 @@ class _SessionPageState extends State<SessionPage> {
         const SizedBox(height: 6),
         Row(
           children: <Widget>[
-            const Text('左：家里　右：厂里（已拉平）',
-                style:
-                    TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-            const Spacer(),
+            Expanded(
+              child: GestureDetector(
+                onTapDown: (_) => setState(() => _showBefore = true),
+                onTapUp: (_) => setState(() => _showBefore = false),
+                onTapCancel: () => setState(() => _showBefore = false),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: _showBefore
+                        ? AppColors.warning.withValues(alpha: 0.12)
+                        : AppColors.card(context),
+                    borderRadius: BorderRadius.circular(AppRadius.control),
+                    border: Border.all(
+                        color: _showBefore
+                            ? AppColors.warning
+                            : AppColors.line(context)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: <Widget>[
+                      Icon(
+                        _showBefore ? Icons.visibility_off : Icons.visibility,
+                        size: 16,
+                        color: _showBefore
+                            ? AppColors.warning
+                            : AppColors.primary,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _showBefore ? '正在看原图…' : '按住看原图',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _showBefore
+                                ? AppColors.warning
+                                : AppColors.text),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
             Text('ΔE ${comparison.deltaE}',
                 style: const TextStyle(
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
                     color: AppColors.success)),
           ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _showBefore
+              ? '左：家里（已标定）　右：厂里（原始，没拉平）'
+              : '左：家里　右：厂里（已拉平）',
+          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
         ),
         const SizedBox(height: AppSpacing.sm),
         Row(
