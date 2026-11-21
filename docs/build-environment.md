@@ -65,7 +65,7 @@ Flutter 3.13.7
 ### 坑 3：JDK 25 让 Kotlin 编译器崩
 - **现象**：`java.lang.IllegalArgumentException: 25.0.3`。
 - **原因**：Android Studio 自带的 JBR 升到了 JDK 25，Kotlin 2.2 的 `JavaVersion.parse` 不认。
-- **修法**：`JAVA_HOME=D:\flutte\jdk-17.0.20.1+1`。
+- **修法**：把 `JAVA_HOME` 指向任意 JDK 17（不要用 Android Studio 自带的 JBR）。
 
 ### 坑 4：compileSdk 不够
 - **现象**：`permission_handler_android requires Android SDK version 37 or higher`。
@@ -98,7 +98,7 @@ Flutter 3.13.7
 | Gradle | 8.14.3（`mirrors.cloud.tencent.com`） |
 | AGP | 8.11.1 |
 | Kotlin | 2.2.20 |
-| JDK | 17（`D:\flutte\jdk-17.0.20.1+1`） |
+| JDK | 17（不要用 Android Studio 自带 JBR，见坑 3） |
 | compileSdk | 37 |
 | Maven 镜像 | 阿里云 google / public / gradle-plugin |
 | minify | false |
