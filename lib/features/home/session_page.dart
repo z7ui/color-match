@@ -949,6 +949,7 @@ class _SessionPageState extends State<SessionPage> {
             ),
           ),
           GestureDetector(
+            onLongPress: () => _captureActions(capture, title),
             onTap: () => _openViewer(
               <String>[capture.imagePath],
               <String>[title + '（原图）'],
@@ -1054,6 +1055,80 @@ class _SessionPageState extends State<SessionPage> {
         ],
       ),
     );
+  }
+
+  /// 长按缩略图：把这张原图存相册 / 分享 / 复制路径。
+  Future<void> _captureActions(Capture capture, String title) async {
+    final String? action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (BuildContext ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(title + ' · 原图',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.download_outlined),
+              title: const Text('保存原图到相册', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, 'save'),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('分享原图', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, 'share'),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.link),
+              title: const Text('复制文件路径', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, 'path'),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.fullscreen),
+              title: const Text('全屏看', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, 'view'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+
+    switch (action) {
+      case 'save':
+        final bool ok = await saveToGallery(capture.imagePath);
+        if (!mounted) return;
+        showSnack(context, ok ? '已保存到相册（原图）' : '保存失败（权限或空间）',
+            error: !ok);
+        break;
+      case 'share':
+        try {
+          await SharePlus.instance.share(
+              ShareParams(files: <XFile>[XFile(capture.imagePath)]));
+        } catch (error) {
+          if (!mounted) return;
+          showSnack(context, '分享失败：' + error.toString(), error: true);
+        }
+        break;
+      case 'path':
+        await Clipboard.setData(ClipboardData(text: capture.imagePath));
+        if (!mounted) return;
+        showSnack(context, '路径已复制');
+        break;
+      case 'view':
+        _openViewer(<String>[capture.imagePath], <String>[title + '（原图）'], 0);
+        break;
+    }
   }
 
   Widget _miniBtn(String label, VoidCallback onTap,
