@@ -182,11 +182,14 @@ class AppDb {
 
   /// 只更新标定相关的列。
   ///
+  /// 标定现在只记白点这一个数值（[calibratedPath] 常态是 null），
+  /// 不再生成「校正后的照片」——家里那张是基准，不能被改色。
+  ///
   /// 以前是「把整个 Capture 重建一遍再传进来」，模型加字段时会静默丢字段；
   /// 现在按 id 直接改列，改哪列写哪列。
   Future<void> updateCaptureCalibration(
     String captureId, {
-    required String calibratedPath,
+    String? calibratedPath,
     required int whiteR,
     required int whiteG,
     required int whiteB,
@@ -196,7 +199,7 @@ class AppDb {
     await d.update(
       'captures',
       <String, Object?>{
-        'calibrated_path': calibratedPath,
+        'calibrated_path': ?calibratedPath,
         'white_r': whiteR,
         'white_g': whiteG,
         'white_b': whiteB,

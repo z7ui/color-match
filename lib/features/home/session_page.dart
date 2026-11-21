@@ -198,26 +198,25 @@ class _SessionPageState extends State<SessionPage> {
       _progress = '标定中…';
     });
     try {
-      final Uint8List bytes = await File(capture.imagePath).readAsBytes();
-      final Uint8List calibrated = await calibrateBytes(
-        bytes,
-        r: white.r,
-        g: white.g,
-        b: white.b,
-      );
-
-      final Directory dir = await getApplicationDocumentsDirectory();
-      final String path = p.join(dir.path, 'captures', widget.sessionId,
-          capture.id + '_calibrated.jpg');
-      await File(path).writeAsBytes(calibrated);
-
+      // 只记白点这一个数值，**不生成、不改写任何照片**。
+      // 家里那张是基准，颜色必须保持现场看到的样子；工地那张在对比时才临时拉过来。
+      // 旧版本会写一张 _calibrated.jpg，等于把要对比的照片改了色 —— 已废弃。
       await AppDb.instance.updateCaptureCalibration(
         capture.id,
-        calibratedPath: path,
         whiteR: white.r.round(),
         whiteG: white.g.round(),
         whiteB: white.b.round(),
       );
+      // 顺手清掉旧版本留下的校正图，别让界面再读到它
+      final String stale = p.join(
+          (await getApplicationDocumentsDirectory()).path,
+          'captures',
+          widget.sessionId,
+          capture.id + '_calibrated.jpg');
+      try {
+        final File staleFile = File(stale);
+        if (await staleFile.exists()) await staleFile.delete();
+      } catch (_) {}
       // 白点变了，旧结果必须失效，否则界面会拿新白点配旧 ΔE
       if (capture.isReference) {
         await AppDb.instance.invalidateComparisons(widget.sessionId);
@@ -226,7 +225,7 @@ class _SessionPageState extends State<SessionPage> {
       }
       _resultIndex = 0;
       await _load();
-      if (mounted) showSnack(context, '已标定：白点 ' + white.toString() + ' → 255');
+      if (mounted) showSnack(context, '已记录白点 ' + white.toString() + '（照片不会被改动）');
     } catch (error) {
       if (mounted) showSnack(context, '标定失败：' + error.toString(), error: true);
     } finally {
@@ -244,7 +243,6 @@ class _SessionPageState extends State<SessionPage> {
   Future<void> _runCompare(Capture reference, Capture target) async {
     final CompareOutcome outcome = await compareFiles(
       referenceRawPath: reference.imagePath,
-      referenceCalibratedPath: reference.calibratedPath ?? reference.imagePath,
       targetPath: target.imagePath,
       refR: reference.whiteR!,
       refG: reference.whiteG!,
@@ -389,7 +387,7 @@ class _SessionPageState extends State<SessionPage> {
       }
 
       final Uint8List jpeg = await buildReportBytes(
-        referencePath: reference.calibratedPath ?? reference.imagePath,
+        referencePath: reference.imagePath,
         rows: rows,
       );
 
@@ -616,9 +614,8 @@ class _SessionPageState extends State<SessionPage> {
       );
     }
 
-    final String shown = comparison?.processedPath ??
-        capture.calibratedPath ??
-        capture.imagePath;
+    // 缩略图永远显示原图：标定只是记了个白点，没有「被改过的版本」要展示
+    final String shown = capture.imagePath;
 
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
@@ -775,7 +772,8 @@ class _SessionPageState extends State<SessionPage> {
     final int index = _resultIndex.clamp(0, comparedTargets.length - 1);
     final Capture target = comparedTargets[index];
     final Comparison comparison = detail.comparisons[target.id]!;
-    final String refPath = reference.calibratedPath ?? reference.imagePath;
+    // 左边永远是家里那张**原图**，不经过任何处理
+    final String refPath = reference.imagePath;
     final String outPath = comparison.processedPath;
     final String rightPath = _showBefore ? target.imagePath : outPath;
     final bool multi = comparedTargets.length > 1;

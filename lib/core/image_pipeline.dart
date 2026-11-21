@@ -14,7 +14,9 @@ import 'compare.dart';
 ///
 /// 约定：入参和返回值只用「可跨 isolate 传输」的类型
 /// （Map / List / String / int / double / Uint8List），不用自定义类。
-const int kWorkSide = 1600; // 存储用的工作副本长边
+///
+/// 注意：**标定不再生成「校正后的照片」**。白点只是测出来的一个数值，
+/// 家里那张作为基准永远保持原样，工地那张在「对比」时临时拉到家里的白点。
 const int kPreviewSide = 1200; // 标定页预览/采样用的长边
 const int kCompareSide = 1400; // 对比计算用的长边（与 downscale 默认值一致）
 const int kReportSide = 1000; // 导出拼图每张的长边
@@ -31,26 +33,10 @@ Uint8List _decodePreview(Map<String, Object?> arg) {
   return img.encodeJpg(small, quality: 88);
 }
 
-/// 标定：解码原图 -> 缩到工作尺寸 -> 白平衡 -> JPEG 字节。
-Uint8List _calibrate(Map<String, Object?> arg) {
-  final Uint8List bytes = arg['bytes']! as Uint8List;
-  final double r = (arg['r']! as num).toDouble();
-  final double g = (arg['g']! as num).toDouble();
-  final double b = (arg['b']! as num).toDouble();
-  final img.Image? decoded = decodeOriented(bytes);
-  if (decoded == null) {
-    throw const FormatException('图片无法解码');
-  }
-  final img.Image work = downscale(decoded, maxSide: kWorkSide);
-  final img.Image fixed =
-      applyWhiteBalance(work, white: WhitePoint(r, g, b));
-  return img.encodeJpg(fixed, quality: 92);
-}
-
-/// 一次对比：读三张图 -> 算 ΔE -> 输出「拉平后」的 JPEG。
+/// 一次对比：读「家里的原图 + 工地的原图」-> 算 ΔE -> 输出「工地拉到家里光线」的 JPEG。
+/// 家里那张只读，绝不改写。
 Map<String, Object?> _compare(Map<String, Object?> arg) {
   final String refRawPath = arg['refRaw']! as String;
-  final String refCalPath = arg['refCal']! as String;
   final String targetPath = arg['target']! as String;
   final double rr = (arg['refR']! as num).toDouble();
   final double rg = (arg['refG']! as num).toDouble();
@@ -61,17 +47,14 @@ Map<String, Object?> _compare(Map<String, Object?> arg) {
 
   final img.Image? refRaw =
       decodeOriented(File(refRawPath).readAsBytesSync());
-  final img.Image? refCal =
-      decodeOriented(File(refCalPath).readAsBytesSync());
   final img.Image? target =
       decodeOriented(File(targetPath).readAsBytesSync());
-  if (refRaw == null || refCal == null || target == null) {
+  if (refRaw == null || target == null) {
     throw const FormatException('图片无法解码');
   }
 
   final CompareResult result = compareToReference(
-    referenceRaw: downscale(refRaw),
-    referenceCalibrated: downscale(refCal),
+    reference: downscale(refRaw),
     targetRaw: downscale(target),
     referenceWhite: WhitePoint(rr, rg, rb),
     targetWhite: WhitePoint(tr, tg, tb),
@@ -121,14 +104,6 @@ Future<Uint8List> decodePreviewBytes(Uint8List bytes,
         {int maxSide = kPreviewSide}) =>
     compute(_decodePreview, <String, Object?>{'bytes': bytes, 'maxSide': maxSide});
 
-Future<Uint8List> calibrateBytes(
-  Uint8List bytes, {
-  required double r,
-  required double g,
-  required double b,
-}) =>
-    compute(_calibrate, <String, Object?>{'bytes': bytes, 'r': r, 'g': g, 'b': b});
-
 class CompareOutcome {
   const CompareOutcome({
     required this.jpeg,
@@ -145,7 +120,6 @@ class CompareOutcome {
 
 Future<CompareOutcome> compareFiles({
   required String referenceRawPath,
-  required String referenceCalibratedPath,
   required String targetPath,
   required int refR,
   required int refG,
@@ -156,7 +130,6 @@ Future<CompareOutcome> compareFiles({
 }) async {
   final Map<String, Object?> out = await compute(_compare, <String, Object?>{
     'refRaw': referenceRawPath,
-    'refCal': referenceCalibratedPath,
     'target': targetPath,
     'refR': refR,
     'refG': refG,

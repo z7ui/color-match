@@ -68,7 +68,7 @@ int _encodeSrgb(double linear) {
 /// 上限不能太紧：室内拍的白纸经常只有 100-150，白点 100 就需要 7.85 倍增益才能到 255，
 /// 卡在 4 倍会导致「标定完白纸还是灰的」（就踩过这个坑）。
 /// 取 12 倍：白点低到 60 还能拉到 205，再暗的框选本身就该被拒（见 WhitePoint.minUsable）。
-const double kMinGain = 0.25;
+const double kMinGain = 0.1;
 const double kMaxGain = 12.0;
 
 /// 在图上取一个矩形区域的平均色（用于框选白纸 / 灰卡）。

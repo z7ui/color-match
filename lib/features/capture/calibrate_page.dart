@@ -217,7 +217,8 @@ class _CalibratePageState extends State<CalibratePage> {
           ],
           const SizedBox(height: 4),
           const Text(
-            '框住画面里那块白（纸的一角就够），别框到瓷砖或阴影。单指拖动移动框，双指缩放调整大小。',
+            '框住画面里那块白（纸的一角就够），别框到瓷砖或阴影。单指拖动移动框，双指缩放调整大小。'
+            '白点只是用来对齐两张照片的光线，这张照片本身不会被改。',
             style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -236,8 +237,8 @@ class _CalibratePageState extends State<CalibratePage> {
   /// 白纸质量自检：沿用 A4 灰阶靶的三条硬指标里能在这里判断的。
   Widget _qualityHint(WhitePoint white) {
     final List<String> issues = <String>[];
-    if (white.luminance < 235) {
-      issues.add('白参考偏低（${white.luminance.toStringAsFixed(0)}，应 ≥235）：光不够或相机欠曝');
+    if (white.luminance < 120) {
+      issues.add('这块白偏暗（${white.luminance.toStringAsFixed(0)}）：拉平别的照片时容易把高光拉爆，建议补光或换块白纸');
     }
     if ((_spread ?? 0) > 15) {
       issues.add('块内不匀（跨度 ${_spread!.toStringAsFixed(0)}，应 ≤15）：框里有反光或阴影');

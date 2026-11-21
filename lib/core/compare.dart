@@ -3,6 +3,10 @@ import 'package:image/image.dart' as img;
 import 'calibration.dart';
 
 /// 一次对比的结果。
+///
+/// 分工是固定的：**参照（家里）是基准，永远不动**；只把目标（工地）拉到参照的光线下。
+/// 早先把参照也标定到 255，等于把「你要对比的那张照片」改了颜色，
+/// 用户看到的颜色和现场就不是一回事了 —— 那是错的。
 class CompareResult {
   const CompareResult({
     required this.processed,
@@ -13,13 +17,13 @@ class CompareResult {
     required this.targetColorAfter,
   });
 
-  /// 目标图拉到参照白点后的成品。
+  /// 目标图拉到参照白点后的成品（「这块砖搬到我家灯下大概这样」）。
   final img.Image processed;
 
-  /// 校正前：两张**原始照片**直接比（用户肉眼看到的差异）。
+  /// 校正前：工地原图 vs 家里原图（你在两个现场各自看到的差异）。
   final double deltaEBefore;
 
-  /// 校正后：两张都标定到 255 基准后比（同一基准）。
+  /// 校正后：工地「拉到家里光线」后 vs 家里原图（排除光源差异后的真实色差）。
   final double deltaEAfter;
 
   final WhitePoint referenceColor;
@@ -32,7 +36,6 @@ class CompareResult {
     return ((deltaEBefore - deltaEAfter) / deltaEBefore).clamp(0.0, 1.0);
   }
 
-  /// 是否显著改善（ΔE 降了 0.5 以上）。
   bool get improved => deltaEAfter < deltaEBefore - 0.5;
 }
 
@@ -45,42 +48,31 @@ WhitePoint centerColor(img.Image image, {double ratio = 0.4, int stride = 1}) {
   return sampleAverage(image, x, y, w, h, stride: stride);
 }
 
-/// 把目标图从自己的白点拉到参照白点，并算校正前后的色差。
+/// 把目标图从它在工地的白点，迁到参照（家里）的白点，并算校正前后的色差。
 ///
-/// 基准说明（之前这里是不一致的，会说白话把人骗了）：
-/// * [deltaEBefore] 用**两张原始图**比 —— 那是用户站在现场看到的差异；
-/// * [deltaEAfter] 用**两张都标定到 255** 的图比 —— 排除光源后的真实色差。
-/// 两者都自洽，不能再出现「一个已标定、一个没标定」的混合基准。
+/// [reference] 是**家里原图**，只读不写；[targetRaw] 是工地原图。
+/// 两边白点都只是「测出来的数值」，不改任何一张照片。
 CompareResult compareToReference({
-  required img.Image referenceRaw,
-  required img.Image referenceCalibrated,
+  required img.Image reference,
   required img.Image targetRaw,
   required WhitePoint referenceWhite,
   required WhitePoint targetWhite,
 }) {
-  // 目标先用自己的白点标定到 255，和参照标定图同一基准
-  final img.Image targetNormalized =
-      applyWhiteBalance(targetRaw, white: targetWhite);
-
-  // 展示给用户的「拉平后」图：目标原始白点 -> 参照白点（保留参照环境的光）
+  // 只动目标：把工地的白点搬到家里的白点上，主人的房子保持原样
   final img.Image processed = transferWhite(
     targetRaw,
     from: targetWhite,
     to: referenceWhite,
   );
 
-  final WhitePoint refRawColor = centerColor(referenceRaw);
-  final WhitePoint refColor = centerColor(referenceCalibrated);
+  final WhitePoint refColor = centerColor(reference);
   final WhitePoint before = centerColor(targetRaw);
-  final WhitePoint after = centerColor(targetNormalized);
-
-  final double eBefore = _deltaE(refRawColor, before);
-  final double eAfter = _deltaE(refColor, after);
+  final WhitePoint after = centerColor(processed);
 
   return CompareResult(
     processed: processed,
-    deltaEBefore: eBefore,
-    deltaEAfter: eAfter,
+    deltaEBefore: _deltaE(refColor, before),
+    deltaEAfter: _deltaE(refColor, after),
     referenceColor: refColor,
     targetColorBefore: before,
     targetColorAfter: after,
@@ -91,34 +83,6 @@ double _deltaE(WhitePoint a, WhitePoint b) => deltaE00(
       rgbToLab(a.r.round(), a.g.round(), a.b.round()),
       rgbToLab(b.r.round(), b.g.round(), b.b.round()),
     );
-
-/// 把两张图拼成一张对比图：左参考、中目标（校正前）、右目标（校正后）。
-img.Image buildSideBySide({
-  required img.Image reference,
-  required img.Image targetBefore,
-  required img.Image targetAfter,
-  int gap = 24,
-}) {
-  final int w = reference.width + targetBefore.width + targetAfter.width + gap * 4;
-  final int h = <int>[
-        reference.height,
-        targetBefore.height,
-        targetAfter.height,
-      ].reduce((int a, int b) => a > b ? a : b) +
-      gap * 2;
-
-  final img.Image canvas = img.Image(width: w, height: h);
-  img.fill(canvas, color: img.ColorRgb8(245, 246, 248));
-
-  int x = gap;
-  img.compositeImage(canvas, reference, dstX: x, dstY: gap);
-  x += reference.width + gap;
-  img.compositeImage(canvas, targetBefore, dstX: x, dstY: gap);
-  x += targetBefore.width + gap;
-  img.compositeImage(canvas, targetAfter, dstX: x, dstY: gap);
-
-  return canvas;
-}
 
 /// 一行对比：参照 | 目标（校正前） | 目标（校正后）。
 img.Image buildRow({
