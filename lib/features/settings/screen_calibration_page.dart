@@ -1,14 +1,11 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/screen_control.dart';
 
-/// 屏幕校色：没有仪器，只能做「人眼自检 + 记录」。
+/// 屏幕自检：没有仪器，只能给几块参照色让用户自己看。
+///
+/// 不做记录、不参与计算——屏幕只影响人眼判读，不改变 ΔE。
 ///
 /// 四张测试卡：
 /// 1. 暗部：5 块近黑灰，能分清几块 ≈ 屏幕黑位/对比度；
@@ -31,14 +28,10 @@ class _ScreenCalibrationPageState extends State<ScreenCalibrationPage> {
   int _card = 0;
   double _brightness = 0.5;
   bool _brightnessReady = false;
-  String? _savedAt;
-
-  static const String _fileName = 'screen_profile.json';
 
   @override
   void initState() {
     super.initState();
-    _load();
     _loadBrightness();
   }
 
@@ -65,44 +58,15 @@ class _ScreenCalibrationPageState extends State<ScreenCalibrationPage> {
     await ScreenControl.setBrightness(next);
   }
 
-  Future<File> _file() async {
-    final Directory dir = await getApplicationDocumentsDirectory();
-    return File(p.join(dir.path, _fileName));
-  }
-
-  Future<void> _load() async {
-    try {
-      final File f = await _file();
-      if (!await f.exists()) return;
-      final Object? json = jsonDecode(await f.readAsString());
-      if (json is Map && mounted) {
-        setState(() => _savedAt = json['checked_at'] as String?);
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _record() async {
-    final File f = await _file();
-    final String now = DateTime.now().toIso8601String();
-    await f.writeAsString(jsonEncode(<String, Object?>{
-      'checked_at': now,
-      'brightness': _brightness,
-      'card': _card,
-    }));
-    if (!mounted) return;
-    setState(() => _savedAt = now);
-    showSnack(context, '已记录：屏幕亮度 ' + (_brightness * 100).round().toString() + '%');
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: buildAppBar('屏幕校色'),
+      appBar: buildAppBar('屏幕自检'),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg),
         children: <Widget>[
           const Text(
-            '没有测量仪器，只能做「人眼自检」。把屏幕固定到一个状态，再看色。',
+            '没有测量仪器，只能做「人眼自检」。这里只是几块参照色，帮你看清屏幕状态；不会记录、也不参与任何计算。',
             style: TextStyle(
                 fontSize: 12, height: 1.6, color: AppColors.textSecondary),
           ),
@@ -127,22 +91,6 @@ class _ScreenCalibrationPageState extends State<ScreenCalibrationPage> {
           const SizedBox(height: AppSpacing.md),
           Text(_tip(),
               style: const TextStyle(fontSize: 13, height: 1.6)),
-          const SizedBox(height: AppSpacing.md),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _record,
-              icon: const Icon(Icons.check, size: 18),
-              label: const Text('屏幕已经调好，记录一下'),
-            ),
-          ),
-          if (_savedAt != null)
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.sm),
-              child: Text('上次确认：' + _savedAt!,
-                  style: TextStyle(
-                      fontSize: 11, color: AppColors.sub(context))),
-            ),
           const SizedBox(height: AppSpacing.lg),
           _modeCard(),
           const SizedBox(height: AppSpacing.md),

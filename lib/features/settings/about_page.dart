@@ -210,8 +210,8 @@ class _AboutPageState extends State<AboutPage> {
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.smartphone_outlined),
-                  title: const Text('屏幕校色'),
-                  subtitle: const Text('人眼自检：暗部 / 高光 / 白点 / 三原色'),
+                  title: const Text('屏幕自检'),
+                  subtitle: const Text('暗部 / 高光 / 白点 / 三原色，看看屏幕状态'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
