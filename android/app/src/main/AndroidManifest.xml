@@ -48,5 +48,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- 检查更新的「去下载」要用系统浏览器打开 https 链接。
+             targetSdk 30+ 必须在 queries 里声明，否则 canLaunchUrl 恒为 false。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>

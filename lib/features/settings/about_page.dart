@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_theme.dart';
@@ -82,17 +83,17 @@ class _AboutPageState extends State<AboutPage> {
   }
 
   Future<void> _open(String url) async {
+    final Uri uri = Uri.parse(url);
     try {
-      final Uri uri = Uri.parse(url);
-      final bool can = await canLaunchUrl(uri);
-      if (!can) {
-        if (mounted) showSnack(context, '打不开这个链接：' + url, error: true);
-        return;
-      }
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (error) {
-      if (mounted) showSnack(context, '打开链接失败：' + error.toString(), error: true);
-    }
+      // 直接 launch，不看 canLaunchUrl：Android 11+ 的包可见性会让预判误报 false
+      final bool ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+    } catch (_) {}
+
+    // 打不开就复制地址，让用户自己粘到浏览器
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    showSnack(context, '打不开浏览器，链接已复制，请粘到浏览器打开', error: true);
   }
 
   @override
