@@ -329,6 +329,7 @@ class CameraProfile {
 
   static const String fileName = 'camera_profile.json';
 
+  /// 配置文件位置（页面要显示「保存于 …」会读它的修改时间）。
   static Future<File> file() async {
     final Directory dir = await getApplicationDocumentsDirectory();
     return File(p.join(dir.path, fileName));

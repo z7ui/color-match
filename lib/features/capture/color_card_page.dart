@@ -28,6 +28,7 @@ class _ColorCardPageState extends State<ColorCardPage> {
   bool _showGrid = false;
   CameraCcm? _result;
   CameraCcm? _saved;
+  DateTime? _savedAt;
 
   /// 四个角（左上、右上、右下、左下），归一化 0..1。
   final List<Offset> _corners = <Offset>[
@@ -45,8 +46,18 @@ class _ColorCardPageState extends State<ColorCardPage> {
 
   Future<void> _loadSaved() async {
     final CameraCcm? ccm = await CameraProfile.load();
+    DateTime? savedAt;
+    if (ccm != null) {
+      try {
+        final File file = await CameraProfile.file();
+        if (await file.exists()) savedAt = await file.lastModified();
+      } catch (_) {}
+    }
     if (!mounted) return;
-    setState(() => _saved = ccm);
+    setState(() {
+      _saved = ccm;
+      _savedAt = savedAt;
+    });
   }
 
   Future<void> _pick() async {
@@ -108,11 +119,32 @@ class _ColorCardPageState extends State<ColorCardPage> {
     showSnack(context, '已保存，之后的对比会先做相机校色');
   }
 
+  /// 重置：删掉保存的校正，回到「只做白点」的原始逻辑。要做确认，别手滑。
   Future<void> _clear() async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('重置相机校色？'),
+        content: const Text(
+            '会删掉这台手机的 3×3 色彩矩阵，之后的对比只做白点校正（回到原来的逻辑）。\n\n'
+            '随时可以用色卡重新算一次，不会影响已有的对比记录。'),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text('重置'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
     await CameraProfile.save(null);
     await _loadSaved();
     if (!mounted) return;
-    showSnack(context, '已关闭相机校色');
+    showSnack(context, '已重置：现在只做白点校正');
   }
 
   @override
@@ -124,7 +156,8 @@ class _ColorCardPageState extends State<ColorCardPage> {
         padding: const EdgeInsets.all(AppSpacing.md),
         children: <Widget>[
           _intro(),
-          if (_saved != null) _savedCard(_saved!),
+          const SizedBox(height: AppSpacing.sm),
+          if (_saved != null) _savedCard(_saved!) else _disabledCard(),
           const SizedBox(height: AppSpacing.md),
           if (!hasImage)
             SizedBox(
@@ -210,9 +243,80 @@ class _ColorCardPageState extends State<ColorCardPage> {
     );
   }
 
+  /// 有校正时的状态卡：残差、保存时间、矩阵，以及**重置按钮**。
   Widget _savedCard(CameraCcm ccm) {
+    final Color color = ccm.isUsable ? AppColors.success : AppColors.warning;
     return Container(
-      margin: const EdgeInsets.only(top: AppSpacing.md),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(ccm.isUsable ? Icons.check_circle_outline : Icons.warning_amber_rounded,
+                  size: 18, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '已启用相机校色',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: color),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _busy ? null : _clear,
+                icon: const Icon(Icons.restart_alt, size: 16),
+                label: const Text('重置', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.danger,
+                  minimumSize: const Size(0, 30),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '拟合残差 ΔE ' +
+                ccm.meanDelta.toStringAsFixed(2) +
+                '（最差 ' +
+                ccm.maxDelta.toStringAsFixed(2) +
+                '）' +
+                (_savedAt == null ? '' : '　·　保存于 ' + _timeText(_savedAt!)),
+            style: TextStyle(fontSize: 12, color: AppColors.sub(context)),
+          ),
+          const SizedBox(height: 6),
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('查看矩阵', style: TextStyle(fontSize: 12)),
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  _matrixText(ccm),
+                  style: const TextStyle(
+                      fontSize: 11, height: 1.5, fontFamily: 'monospace'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 没校正时的状态卡：明确告诉用户「现在是关的，只做白点」。
+  Widget _disabledCard() {
+    return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: AppColors.card(context),
@@ -221,24 +325,49 @@ class _ColorCardPageState extends State<ColorCardPage> {
       ),
       child: Row(
         children: <Widget>[
-          Icon(Icons.check_circle_outline,
-              size: 18,
-              color: ccm.isUsable ? AppColors.success : AppColors.warning),
-          const SizedBox(width: 8),
+          Icon(Icons.radio_button_unchecked,
+              size: 18, color: AppColors.textHint),
+          const SizedBox(width: 6),
           Expanded(
             child: Text(
-              '当前已启用相机校色（拟合残差 ΔE '
-              '${ccm.meanDelta.toStringAsFixed(2)} / 最差 ${ccm.maxDelta.toStringAsFixed(2)}）',
-              style: const TextStyle(fontSize: 12),
+              '未启用相机校色（只做白点校正）。没有色卡就不用管这里，不影响使用。',
+              style: TextStyle(
+                  fontSize: 12, height: 1.5, color: AppColors.sub(context)),
             ),
-          ),
-          TextButton(
-            onPressed: _busy ? null : _clear,
-            child: const Text('关闭', style: TextStyle(fontSize: 12)),
           ),
         ],
       ),
     );
+  }
+
+  String _matrixText(CameraCcm ccm) {
+    String f(double v) => v.toStringAsFixed(3).padLeft(7);
+    final StringBuffer buffer = StringBuffer();
+    for (int row = 0; row < 3; row++) {
+      buffer.writeln('[ ' +
+          f(ccm.matrix[row * 3]) +
+          ' ' +
+          f(ccm.matrix[row * 3 + 1]) +
+          ' ' +
+          f(ccm.matrix[row * 3 + 2]) +
+          ' ]   offset ' +
+          f(ccm.offset[row]) +
+          '');
+    }
+    return buffer.toString();
+  }
+
+  String _timeText(DateTime time) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return time.year.toString() +
+        '-' +
+        two(time.month) +
+        '-' +
+        two(time.day) +
+        ' ' +
+        two(time.hour) +
+        ':' +
+        two(time.minute);
   }
 
   Widget _canvas() {
