@@ -34,8 +34,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _create() async {
-    final TextEditingController controller =
-        TextEditingController(text: '瓷砖对比 ${DateTime.now().month}-${DateTime.now().day}');
+    final DateTime now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final TextEditingController controller = TextEditingController(
+        text: '对比 ${now.month}${now.day}-${two(now.hour)}${two(now.minute)}${two(now.second)}');
     final String? name = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
@@ -80,6 +82,39 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     _reload();
+  }
+
+  Future<void> _confirmDelete(CompareSession session) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('删除这个对比项目？'),
+        content: Text('「${session.name}」里的所有照片和对比结果都会删掉，不能恢复。'),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    await AppDb.instance.deleteSession(session.id);
+    final Directory dir = await getApplicationDocumentsDirectory();
+    try {
+      final Directory sessionDir =
+          Directory(p.join(dir.path, 'captures', session.id));
+      if (await sessionDir.exists()) {
+        await sessionDir.delete(recursive: true);
+      }
+    } catch (_) {}
+    _reload();
+    if (mounted) showSnack(context, '已删除');
   }
 
   @override
@@ -180,7 +215,12 @@ class _HomePageState extends State<HomePage> {
                             ],
                           ),
                         ),
-                        const Icon(Icons.chevron_right, color: AppColors.textHint),
+                        IconButton(
+                          onPressed: () => _confirmDelete(s),
+                          icon: const Icon(Icons.delete_outline, size: 20),
+                          color: AppColors.danger,
+                          tooltip: '删除项目',
+                        ),
                       ],
                     ),
                   ),
