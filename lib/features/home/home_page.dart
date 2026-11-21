@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/app_theme.dart';
+import '../../core/config.dart';
 import '../../core/db.dart';
 import '../../core/models.dart';
 import '../settings/about_page.dart';
@@ -84,7 +85,7 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: buildAppBar(context, AppConfigTitle.title, actions: <Widget>[
+      appBar: buildAppBar(context, AppConfig.appName, actions: <Widget>[
         IconButton(
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const GuidePage()),
@@ -196,8 +197,4 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-}
-
-class AppConfigTitle {
-  static const String title = '选色助手';
 }

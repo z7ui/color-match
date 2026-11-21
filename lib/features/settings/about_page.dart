@@ -26,20 +26,45 @@ class _AboutPageState extends State<AboutPage> {
     final Map<String, dynamic>? json =
         await fetchJson('${AppConfig.defaultBaseUrl}${AppConfig.versionPath}');
     if (!mounted) return;
+    setState(() => _checking = false);
+
     if (json == null) {
-      setState(() {
-        _checking = false;
-        _updateText = '没拉到版本清单（服务器还没放，或网络不通）';
-      });
+      setState(() => _updateText = '没拉到版本清单（服务器还没放，或网络不通）');
       return;
     }
+
     final int remote = (json['versionCode'] as num?)?.toInt() ?? 0;
-    setState(() {
-      _checking = false;
-      _updateText = remote > AppConfig.buildNumber
-          ? '发现新版本 v${json['version']}：${json['notes'] ?? ''}'
-          : '已是最新版本（v${AppConfig.appVersion}）';
-    });
+    final String version = '${json['version'] ?? ''}';
+    final String notes = '${json['notes'] ?? ''}';
+    final String? apkUrl = json['apk_url'] as String?;
+
+    if (remote <= AppConfig.buildNumber) {
+      setState(() => _updateText = '已是最新版本（v${AppConfig.appVersion}）');
+      return;
+    }
+
+    setState(() => _updateText = '发现新版本 v$version');
+    if (!mounted) return;
+
+    final bool? go = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text('发现新版本 v$version'),
+        content: Text(notes.isEmpty ? '有新版本可用。' : notes),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('以后再说')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('去下载'),
+          ),
+        ],
+      ),
+    );
+    if (go == true && apkUrl != null && apkUrl.isNotEmpty) {
+      await _open(apkUrl);
+    }
   }
 
   Future<void> _loadAnnouncement() async {

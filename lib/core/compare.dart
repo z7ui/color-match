@@ -37,22 +37,31 @@ WhitePoint centerColor(img.Image image, {double ratio = 0.4}) {
   return sampleAverage(image, x, y, w, h);
 }
 
-/// 把目标图拉到参照的白点，并算校正前后的色差。
+/// 把目标图从自己的白点拉到参照白点，并算校正前后的色差。
+///
+/// 基准必须统一：参照方的主体色取「标定图」（白点已拉到255），
+/// 目标同样先标定到255，再算 ΔE；否则一个在255基准、一个在原始白点基准，
+/// ΔE 会被系统性高估。
 CompareResult compareToReference({
   required img.Image reference,
   required img.Image target,
   required WhitePoint referenceWhite,
   required WhitePoint targetWhite,
 }) {
+  // 目标先用自己的白点标定到 255，和参照标定图同一基准
+  final img.Image targetNormalized =
+      applyWhiteBalance(target, white: targetWhite);
+
+  // 展示给用户的「拉平后」图：目标原始白点 -> 参照白点（保留参照环境的光）
   final img.Image processed = transferWhite(
     target,
     from: targetWhite,
     to: referenceWhite,
   );
 
-  final WhitePoint refColor = centerColor(reference);
+  final WhitePoint refColor = centerColor(reference); // 已标定的参照图
   final WhitePoint before = centerColor(target);
-  final WhitePoint after = centerColor(processed);
+  final WhitePoint after = centerColor(targetNormalized); // 同基准比较
 
   final double eBefore = deltaE00(
     rgbToLab(refColor.r.round(), refColor.g.round(), refColor.b.round()),
