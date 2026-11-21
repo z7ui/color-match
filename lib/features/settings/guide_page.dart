@@ -16,16 +16,18 @@ class GuidePage extends StatelessWidget {
           _step(
             context,
             '1',
-            '准备一张白纸',
-            'A4 白纸或灰卡都行，越哑光越好（别用铜版纸、别用带格子的）。'
-                '这张纸的作用是告诉软件「这里的光是什么颜色」，它不是对比对象。',
+            '准备一张白纸（不用整张入画）',
+            '一张普通 A4 白纸、白卡、甚至白墙都行，越哑光越好（别用铜版纸、别用带格子的）。\n\n'
+                '只要让纸的「一个白角」入镜就够了——大约占画面 1/5，'
+                '不需要整张纸塞进画面，也不需要灰阶靶、色卡那类东西。\n\n'
+                '它的作用只是告诉软件「这里的光偏什么色」，不是对比对象。',
           ),
           _step(
             context,
             '2',
             '怎么拍',
             '· 主体（瓷砖 / 门窗 / 小样）放画面中间\n'
-                '· 白纸放左下角，别挡住主体\n'
+                '· 白纸只要露一个角在左下角那块，别挡住主体\n'
                 '· 光从两侧来，不要单侧打光、不要开闪光灯\n'
                 '· 关掉 HDR、AI 摄影、夜景模式',
           ),
@@ -74,6 +76,30 @@ class GuidePage extends StatelessWidget {
                   '· 主体反光 → 换个角度，别正对灯\n'
                   '· 两个地方用了不同的灯 → 这正是要修的东西，前提是白纸都拍清楚',
                   style: TextStyle(fontSize: 13, height: 1.7),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: AppColors.card(context),
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              border: Border.all(color: AppColors.line(context)),
+            ),
+            child: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('A4 灰阶靶？这里用不上',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                SizedBox(height: 8),
+                Text(
+                  '那张打了 25 个灰块的 A4 靶纸，是用来「诊断照片灰阶准不准」的'
+                  '（配 Python 脚本读 25 块、算光照梯度），要求整张纸入画、透视校正。\n\n'
+                  '这个 App 不做那件事——它只用「一块白」定白点，把两个地方的光拉平。'
+                  '所以不用打印灰阶靶，更不用整张纸入画。拿张普通白纸露个角就行。',
+                  style: TextStyle(fontSize: 12, height: 1.7, color: AppColors.textSecondary),
                 ),
               ],
             ),

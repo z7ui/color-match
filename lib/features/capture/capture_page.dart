@@ -122,7 +122,7 @@ class _CapturePageState extends State<CapturePage> {
                       child: Column(
                         children: <Widget>[
                           const Text(
-                            '主体放中间 · 白纸放左下角（别挡主体）',
+                            '主体放中间 · 白纸露一个角就行（不用整张入画）',
                             style: TextStyle(color: Colors.white, fontSize: 13),
                           ),
                           const SizedBox(height: 12),
@@ -220,7 +220,7 @@ class _GuideOverlay extends StatelessWidget {
               top: paper.top - 20,
               width: paper.width,
               child: const Center(
-                child: Text('白纸',
+                child: Text('白纸露一角',
                     style: TextStyle(color: Colors.white, fontSize: 11)),
               ),
             ),
